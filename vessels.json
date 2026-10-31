@@ -1,0 +1,317 @@
+[
+  {
+    "mmsi": "212905000",
+    "name": "Seaway Strashnov",
+    "contractor": "Seaway7",
+    "type": "HLV",
+    "job": ""
+  },
+  {
+    "mmsi": "209178000",
+    "name": "Seaway Alfa Lift",
+    "contractor": "Seaway7",
+    "type": "HLV",
+    "job": ""
+  },
+  {
+    "mmsi": "209583000",
+    "name": "Seaway Ventus",
+    "contractor": "Seaway7",
+    "type": "WTIV",
+    "job": ""
+  },
+  {
+    "mmsi": "232015468",
+    "name": "Seaway Aimery",
+    "contractor": "Seaway7",
+    "type": "Support/CLV",
+    "job": ""
+  },
+  {
+    "mmsi": "235084529",
+    "name": "Seaway Phoenix",
+    "contractor": "Seaway7",
+    "type": "CLV",
+    "job": ""
+  },
+  {
+    "mmsi": "205755000",
+    "name": "Orion",
+    "contractor": "DEME",
+    "type": "HLV",
+    "job": ""
+  },
+  {
+    "mmsi": "416073000",
+    "name": "Green Jade",
+    "contractor": "DEME",
+    "type": "Floating HLV",
+    "job": ""
+  },
+  {
+    "mmsi": "218781000",
+    "name": "Innovation",
+    "contractor": "DEME",
+    "type": "Jack-up HLV",
+    "job": ""
+  },
+  {
+    "mmsi": "244010952",
+    "name": "Living Stone",
+    "contractor": "DEME",
+    "type": "CLV",
+    "job": ""
+  },
+  {
+    "mmsi": "259291000",
+    "name": "Norse Energi",
+    "contractor": "DEME",
+    "type": "CLV/support",
+    "job": ""
+  },
+  {
+    "mmsi": "353979000",
+    "name": "Thialf",
+    "contractor": "Heerema",
+    "type": "SSCV",
+    "job": ""
+  },
+  {
+    "mmsi": "374887000",
+    "name": "Sleipnir",
+    "contractor": "Heerema",
+    "type": "SSCV",
+    "job": ""
+  },
+  {
+    "mmsi": "309461000",
+    "name": "Saipem 7000",
+    "contractor": "Saipem",
+    "type": "SSCV",
+    "job": ""
+  },
+  {
+    "mmsi": "219029786",
+    "name": "Wind Orca",
+    "contractor": "Cadeler",
+    "type": "WTIV",
+    "job": ""
+  },
+  {
+    "mmsi": "219029785",
+    "name": "Wind Osprey",
+    "contractor": "Cadeler",
+    "type": "WTIV",
+    "job": ""
+  },
+  {
+    "mmsi": "219032994",
+    "name": "Wind Peak",
+    "contractor": "Cadeler",
+    "type": "WTIV",
+    "job": ""
+  },
+  {
+    "mmsi": "219033393",
+    "name": "Wind Pace",
+    "contractor": "Cadeler",
+    "type": "WTIV",
+    "job": ""
+  },
+  {
+    "mmsi": "356068000",
+    "name": "Wind Scylla",
+    "contractor": "Cadeler",
+    "type": "WTIV",
+    "job": ""
+  },
+  {
+    "mmsi": "538012969",
+    "name": "Wind Zaratan",
+    "contractor": "Cadeler",
+    "type": "WTIV",
+    "job": ""
+  },
+  {
+    "mmsi": "253813000",
+    "name": "Voltaire",
+    "contractor": "Jan De Nul",
+    "type": "WTIV",
+    "job": ""
+  },
+  {
+    "mmsi": "253726000",
+    "name": "Les Alizés",
+    "contractor": "Jan De Nul",
+    "type": "Floating HLV",
+    "job": ""
+  },
+  {
+    "mmsi": "253366000",
+    "name": "Vole au vent",
+    "contractor": "Jan De Nul",
+    "type": "Jack-up",
+    "job": ""
+  },
+  {
+    "mmsi": "412354000",
+    "name": "Fleeming Jenkin",
+    "contractor": "Jan De Nul",
+    "type": "CLV (temp. MMSI)",
+    "job": ""
+  },
+  {
+    "mmsi": "253134000",
+    "name": "Isaac Newton",
+    "contractor": "Jan De Nul",
+    "type": "CLV",
+    "job": ""
+  },
+  {
+    "mmsi": "253525000",
+    "name": "Willem de Vlamingh",
+    "contractor": "Jan De Nul",
+    "type": "CLV",
+    "job": ""
+  },
+  {
+    "mmsi": "245179000",
+    "name": "Aeolus",
+    "contractor": "Van Oord",
+    "type": "Jack-up",
+    "job": ""
+  },
+  {
+    "mmsi": "244832000",
+    "name": "Boreas",
+    "contractor": "Van Oord",
+    "type": "WTIV",
+    "job": ""
+  },
+  {
+    "mmsi": "308851000",
+    "name": "Svanen",
+    "contractor": "Van Oord",
+    "type": "Pile installation",
+    "job": ""
+  },
+  {
+    "mmsi": "244820968",
+    "name": "Nexus",
+    "contractor": "Van Oord",
+    "type": "CLV",
+    "job": ""
+  },
+  {
+    "mmsi": "229080000",
+    "name": "Bold Tern",
+    "contractor": "Fred. Olsen",
+    "type": "WTIV",
+    "job": ""
+  },
+  {
+    "mmsi": "229044000",
+    "name": "Brave Tern",
+    "contractor": "Fred. Olsen",
+    "type": "WTIV",
+    "job": ""
+  },
+  {
+    "mmsi": "215644000",
+    "name": "Blue Tern",
+    "contractor": "Fred. Olsen",
+    "type": "WTIV",
+    "job": ""
+  },
+  {
+    "mmsi": "431773000",
+    "name": "Blue Wind",
+    "contractor": "Fred. Olsen",
+    "type": "WTIV (Shimizu)",
+    "job": ""
+  },
+  {
+    "mmsi": "247415300",
+    "name": "Leonardo da Vinci",
+    "contractor": "Prysmian",
+    "type": "CLV",
+    "job": ""
+  },
+  {
+    "mmsi": "247415600",
+    "name": "Monna Lisa",
+    "contractor": "Prysmian",
+    "type": "CLV",
+    "job": ""
+  },
+  {
+    "mmsi": "235093018",
+    "name": "Cable Enterprise",
+    "contractor": "Prysmian",
+    "type": "CLV",
+    "job": ""
+  },
+  {
+    "mmsi": "247313000",
+    "name": "Giulio Verne",
+    "contractor": "Prysmian",
+    "type": "CLV",
+    "job": ""
+  },
+  {
+    "mmsi": "257016000",
+    "name": "NKT Victoria",
+    "contractor": "NKT",
+    "type": "CLV",
+    "job": ""
+  },
+  {
+    "mmsi": "257682000",
+    "name": "Nexans Aurora",
+    "contractor": "Nexans",
+    "type": "CLV",
+    "job": ""
+  },
+  {
+    "mmsi": "257253000",
+    "name": "Nexans Skagerrak",
+    "contractor": "Nexans",
+    "type": "CLV",
+    "job": ""
+  },
+  {
+    "mmsi": "259259000",
+    "name": "Nexans Electra",
+    "contractor": "Nexans",
+    "type": "CLV",
+    "job": ""
+  },
+  {
+    "mmsi": "209851000",
+    "name": "Ndurance",
+    "contractor": "Boskalis",
+    "type": "CLV",
+    "job": ""
+  },
+  {
+    "mmsi": "209852000",
+    "name": "Ndeavor",
+    "contractor": "Boskalis",
+    "type": "CLV",
+    "job": ""
+  },
+  {
+    "mmsi": "212827000",
+    "name": "Bokalift 1",
+    "contractor": "Boskalis",
+    "type": "Crane vessel",
+    "job": ""
+  },
+  {
+    "mmsi": "209951000",
+    "name": "Bokalift 2",
+    "contractor": "Boskalis",
+    "type": "Crane vessel",
+    "job": ""
+  }
+]

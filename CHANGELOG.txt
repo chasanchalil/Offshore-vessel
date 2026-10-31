@@ -1,0 +1,3 @@
+v2.3 (2026-10-31) – Open-Meteo rüzgar + dalga (saatlik, gemi konumunda); segment ve filo tablolarında Hs/rüzgar; Activity CSV'ye hava sütunları
+v2.2 (2026-10-31) – Toplama sıklığı 15 dk, dinleme 120 sn, veri boşluğu eşiği 50 dk
+v2.1 (2026-10-31) – 45 gemi / 12 contractor, contractor filtresi, Contractor+Type sütunları

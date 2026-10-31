@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vessel Tracker</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+:root{--bg:#0f1720;--panel:#16212d;--line:#24364a;--txt:#e6edf3;--mut:#8aa0b4;--acc:#2f9be0;--ok:#2fbf71;--warn:#e0a92f;--bad:#e0563f}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
+header h1{font-size:16px;margin:0;font-weight:600}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:99px;background:#0b121a;border:1px solid var(--line);font-size:12px;color:var(--mut)}
+.sp{flex:1}
+button,select{font:inherit;color:var(--txt);background:#0b121a;border:1px solid var(--line);border-radius:6px;padding:6px 10px;cursor:pointer}
+button:hover{border-color:var(--acc)}
+button.on{background:var(--acc);border-color:var(--acc);color:#fff}
+main{display:flex;height:calc(100% - 53px)}
+aside{width:390px;min-width:300px;border-right:1px solid var(--line);display:flex;flex-direction:column;background:var(--panel)}
+#map{flex:1}
+#list{overflow:auto;flex:1}
+.v{padding:9px 12px;border-bottom:1px solid var(--line);cursor:pointer}
+.v:hover,.v.sel{background:#1c2a39}
+.v .t{display:flex;align-items:center;gap:8px;font-weight:600}
+.v .t .age{margin-left:auto;font-weight:400;font-size:12px}
+.v .m{color:var(--mut);font-size:12px;margin-top:3px;display:grid;grid-template-columns:1fr 1fr;gap:2px 10px}
+.job{font-size:11px;color:var(--acc);font-weight:400}
+.g{color:var(--ok)}.a{color:var(--warn)}.r{color:var(--bad)}.n{color:var(--mut)}
+#act{display:none;border-top:1px solid var(--line);max-height:48%;overflow:auto;padding:8px 12px}
+.bar{display:flex;height:14px;border-radius:4px;overflow:hidden;margin:6px 0 8px;background:#0b121a}
+.bar span{display:block;height:100%}
+table.at{width:100%;border-collapse:collapse;font-size:12px}
+table.at td,table.at th{padding:4px 6px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+table.at th{color:var(--mut);font-weight:500}
+table.at td.num,table.at th.num{text-align:right}
+.sw{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}
+.foot{padding:8px 12px;border-top:1px solid var(--line);font-size:12px;color:var(--mut);display:flex;gap:8px;flex-wrap:wrap}
+#fleet{display:none;flex:1;overflow:auto;padding:16px}
+#fleet h2{font-size:15px;margin:0 0 4px}
+#fleet p{color:var(--mut);font-size:12px;margin:0 0 12px}
+#fleet tr{cursor:pointer}#fleet tr:hover td{background:#1c2a39}
+.ship-ico{background:none;border:none}
+.leaflet-popup-content{font-size:13px;line-height:1.5}
+@media (max-width:760px){main{flex-direction:column}aside{width:100%;height:50%;border-right:none;border-bottom:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<header>
+  <h1>⚓ Vessel Tracker</h1>
+  <span class="pill" id="upd">Loading…</span>
+  <span class="sp"></span>
+  <select id="ctr"><option value="">All contractors</option></select>
+  <button id="tMap" class="on">Map</button><button id="tFleet">Fleet analysis</button>
+  <select id="hours">
+    <option value="24">Last 24 h</option><option value="72">Last 3 d</option>
+    <option value="168" selected>Last 7 d</option><option value="720">Last 30 d</option>
+  </select>
+  <button id="acsv">Activity CSV</button>
+</header>
+<main>
+  <aside id="side">
+    <div id="list"></div>
+    <div id="act"></div>
+    <div class="foot"><span class="g">● &lt;45 min</span><span class="a">● &lt;3 h</span><span class="r">● older</span><span class="n">● no data</span>
+      <span class="sp"></span><span>AIS: AISStream.io · Weather: <a href="https://open-meteo.com" style="color:var(--mut)">Open-Meteo.com</a> (CC BY 4.0) · v2.3</span></div>
+  </aside>
+  <div id="map"></div>
+  <div id="fleet"></div>
+</main>
+<script>
+const NAV=["Under way (engine)","At anchor","Not under command","Restricted manoeuvrability","Constrained by draught","Moored","Aground","Fishing","Under way (sailing)","","","Towing astern","Pushing ahead","","AIS-SART","Not defined"];
+const STATES=["Stationary / working","Slow / manoeuvring","Transit","At anchor","Moored","No data"];
+const SCOL={"Transit":"#2f9be0","Slow / manoeuvring":"#9b7be0","Stationary / working":"#2fbf71","At anchor":"#e0a92f","Moored":"#8aa0b4","No data":"#3a4a5c"};
+const INTERVAL=15, GAP=50; // minutes
+const $=id=>document.getElementById(id);
+let vessels=[], latest={}, positions={}, weather={}, selected=null, firstFit=true;
+const markers={}; let trackLayer=null;
+
+const map=L.map("map",{worldCopyJump:true}).setView([54.5,6],6);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:18,attribution:"© OpenStreetMap"}).addTo(map);
+const sea=L.tileLayer("https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png",{maxZoom:18,attribution:"© OpenSeaMap"}).addTo(map);
+L.control.layers(null,{"Sea marks":sea}).addTo(map); L.control.scale({imperial:false}).addTo(map);
+
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt=(x,d=1)=>x==null||x===""?"–":Number(x).toFixed(d);
+const local=ts=>ts?new Date(ts).toLocaleString([], {dateStyle:"short",timeStyle:"short"}):"–";
+const ageMin=ts=>ts?(Date.now()-Date.parse(ts))/60000:null;
+const ageCls=m=>m==null?"n":m<45?"g":m<180?"a":"r";
+const ageTxt=m=>m==null?"no data":m<60?Math.round(m)+" min":m<2880?(m/60).toFixed(1)+" h":Math.round(m/1440)+" d";
+
+function parseCSV(txt){
+  const lines=txt.trim().split(/\r?\n/); const h=lines.shift().split(",");
+  return lines.map(l=>{const c=l.split(","),o={}; h.forEach((k,i)=>o[k]=c[i]===""?null:c[i]); return o;});
+}
+async function getText(url){ const r=await fetch(url+"?t="+Date.now()); if(!r.ok) throw new Error(r.status); return r.text(); }
+
+async function load(){
+  vessels=JSON.parse(await getText("vessels.json"));
+  const cur=$("ctr").value, cs=[...new Set(vessels.map(v=>v.contractor).filter(Boolean))];
+  $("ctr").innerHTML='<option value="">All contractors</option>'+cs.map(c=>`<option ${c===cur?"selected":""}>${esc(c)}</option>`).join("");
+  try{ latest=JSON.parse(await getText("data/latest.json")); }catch(e){ latest={vessels:{}}; }
+  const now=new Date(), months=[];
+  for(let i=1;i>=0;i--){ const d=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth()-i,1)); months.push(d.toISOString().slice(0,7)); }
+  positions={};
+  for(const m of months){
+    try{
+      for(const r of parseCSV(await getText(`data/positions_${m}.csv`))){
+        (positions[r.mmsi]??=[]).push({ts:r.ts_utc,lat:+r.lat,lon:+r.lon,sog:r.sog==null?null:+r.sog,cog:r.cog==null?null:+r.cog,nav:r.nav_status==null?null:+r.nav_status});
+      }
+    }catch(e){}
+  }
+  for(const k in positions) positions[k].sort((a,b)=>a.ts<b.ts?-1:1);
+  weather={};
+  for(const m of months){
+    try{
+      for(const r of parseCSV(await getText(`data/weather_${m}.csv`))){
+        const n=x=>x==null?null:+x;
+        (weather[r.mmsi]??=[]).push({ts:r.ts_utc,wind:n(r.wind_ms),gust:n(r.gust_ms),hs:n(r.hs_m),tp:n(r.tp_s)});
+      }
+    }catch(e){}
+  }
+  for(const k in weather) weather[k].sort((a,b)=>a.ts<b.ts?-1:1);
+  const lr=latest.last_run;
+  $("upd").textContent = lr ? `Updated ${local(lr.utc)} · ${lr.received}/${lr.tracked} vessels reported` : "No data yet – run the workflow once";
+  render();
+}
+
+function info(v){ return Object.assign({mmsi:v.mmsi,label:v.name||v.mmsi,job:v.job||"",contractor:v.contractor||"",vtype:v.type||""}, latest.vessels?.[v.mmsi]||{}); }
+
+function classify(sog,nav){
+  if(nav===5) return "Moored"; if(nav===1) return "At anchor";
+  if(sog==null) return nav===0?"Transit":"Stationary / working";
+  if(sog<1) return "Stationary / working"; if(sog<5) return "Slow / manoeuvring"; return "Transit";
+}
+function activity(mmsi,hours){
+  const end=Date.now(), start=end-hours*3600e3;
+  const pts=(positions[mmsi]||[]).filter(p=>Date.parse(p.ts)>=start);
+  const segs=[];
+  const push=(state,t0,t1,p)=>{ if(t1<=t0) return; const l=segs[segs.length-1];
+    if(l&&l.state===state){ l.end=t1; if(p) l.pts.push(p); } else segs.push({state,start:t0,end:t1,pts:p?[p]:[]}); };
+  if(pts.length) push("No data",start,Date.parse(pts[0].ts),null); else push("No data",start,end,null);
+  pts.forEach((p,i)=>{
+    const t=Date.parse(p.ts), tn=i+1<pts.length?Date.parse(pts[i+1].ts):Math.min(end,t+INTERVAL*60e3);
+    const st=classify(p.sog,p.nav);
+    if(tn-t>GAP*60e3){ push(st,t,t+INTERVAL*60e3,p); push("No data",t+INTERVAL*60e3,tn,null); }
+    else push(st,t,tn,p);
+  });
+  if(pts.length){ const lt=Date.parse(pts[pts.length-1].ts)+INTERVAL*60e3; if(lt<end) push("No data",lt,end,null); }
+  const wx=(weather[mmsi]||[]);
+  const totals={}; STATES.forEach(s=>totals[s]=0);
+  for(const s of segs){ s.hours=(s.end-s.start)/3600e3; totals[s.state]+=s.hours;
+    if(s.pts.length){ s.lat=s.pts.reduce((a,p)=>a+p.lat,0)/s.pts.length; s.lon=s.pts.reduce((a,p)=>a+p.lon,0)/s.pts.length;
+      const sg=s.pts.filter(p=>p.sog!=null); s.avg_sog=sg.length?sg.reduce((a,p)=>a+p.sog,0)/sg.length:null; }
+    const w=wx.filter(x=>{const t=Date.parse(x.ts); return t>=s.start-30*60e3&&t<s.end;});
+    const avg=k=>{const v=w.map(x=>x[k]).filter(x=>x!=null); return v.length?v.reduce((a,b)=>a+b,0)/v.length:null;};
+    const mx=k=>{const v=w.map(x=>x[k]).filter(x=>x!=null); return v.length?Math.max(...v):null;};
+    s.hs=avg("hs"); s.hs_max=mx("hs"); s.wind=avg("wind"); s.wind_max=mx("wind"); }
+  return {segs,totals};
+}
+
+function icon(v){
+  const col={g:"#2fbf71",a:"#e0a92f",r:"#e0563f",n:"#8aa0b4"}[ageCls(ageMin(v.ts_utc))];
+  const sel=v.mmsi===selected?'stroke="#fff" stroke-width="2.5"':'stroke="#0b121a" stroke-width="1.5"';
+  const mov=(v.sog??0)>0.5, rot=v.heading??v.cog??0;
+  const shape=mov?'<path d="M12 2 L19 21 L12 17 L5 21 Z"/>':'<circle cx="12" cy="12" r="6"/>';
+  return L.divIcon({className:"ship-ico",iconSize:[24,24],iconAnchor:[12,12],
+    html:`<svg width="24" height="24" viewBox="0 0 24 24" style="transform:rotate(${mov?rot:0}deg)"><g fill="${col}" ${sel}>${shape}</g></svg>`});
+}
+function popup(v){
+  const nav=v.nav_status!=null&&NAV[v.nav_status]?NAV[v.nav_status]:"–";
+  return `<b>${esc(v.label)}</b> · ${esc(v.contractor)} ${esc(v.vtype)}${v.job?" · "+esc(v.job):""}<br>MMSI ${v.mmsi}${v.imo?" · IMO "+esc(v.imo):""}${v.length?` · ${v.length}×${v.beam??"?"} m`:""}<br>
+  SOG ${fmt(v.sog)} kn · COG ${fmt(v.cog,0)}° · ${nav}<br>${v.destination?"→ "+esc(v.destination)+(v.eta?" (ETA "+esc(v.eta)+")":"")+"<br>":""}
+  ${v.weather?`Hs ${fmt(v.weather.hs_m)} m · Tp ${fmt(v.weather.tp_s,0)} s · Wind ${fmt(v.weather.wind_ms)} m/s (gust ${fmt(v.weather.gust_ms)}) · ${local(v.weather.ts_utc)}<br>`:""}
+  ${fmt(v.lat,4)}, ${fmt(v.lon,4)}<br>Last: ${local(v.ts_utc)} (${ageTxt(ageMin(v.ts_utc))} ago)`;
+}
+
+const shown=()=>vessels.filter(v=>!$("ctr").value||v.contractor===$("ctr").value);
+function render(){
+  const list=shown().map(info);
+  $("list").innerHTML=list.map(v=>{const m=ageMin(v.ts_utc), nav=v.nav_status!=null&&NAV[v.nav_status]?NAV[v.nav_status]:"–";
+    return `<div class="v ${v.mmsi===selected?"sel":""}" data-m="${v.mmsi}">
+      <div class="t"><span class="${ageCls(m)}">●</span>${esc(v.label)} <span class="job">${esc(v.contractor)} · ${esc(v.vtype)}${v.job?" · "+esc(v.job):""}</span><span class="age ${ageCls(m)}">${ageTxt(m)}</span></div>
+      <div class="m"><span>SOG ${fmt(v.sog)} kn · COG ${fmt(v.cog,0)}°</span><span>${classify(v.sog==null?null:+v.sog,v.nav_status)}</span>
+      ${v.weather?`<span style="grid-column:1/3">🌊 Hs ${fmt(v.weather.hs_m)} m · Tp ${fmt(v.weather.tp_s,0)} s · 💨 ${fmt(v.weather.wind_ms)} m/s (gust ${fmt(v.weather.gust_ms)})</span>`:""}
+      ${v.destination?`<span style="grid-column:1/3">→ ${esc(v.destination)}</span>`:""}</div></div>`;}).join("");
+  const seen=new Set();
+  for(const v of list){ if(v.lat==null) continue; seen.add(v.mmsi);
+    if(!markers[v.mmsi]){ markers[v.mmsi]=L.marker([v.lat,v.lon]).addTo(map).on("click",()=>select(v.mmsi,false)).bindPopup("").bindTooltip("",{direction:"top",offset:[0,-10]}); }
+    markers[v.mmsi].setLatLng([v.lat,v.lon]).setIcon(icon(v)).setPopupContent(popup(v)).setTooltipContent(esc(v.label)); }
+  for(const k in markers) if(!seen.has(k)){ map.removeLayer(markers[k]); delete markers[k]; }
+  if(firstFit&&seen.size){ firstFit=false; map.fitBounds(list.filter(v=>v.lat!=null).map(v=>[v.lat,v.lon]),{padding:[40,40],maxZoom:10}); }
+  renderAct(); renderFleet();
+}
+
+function renderAct(){
+  if(trackLayer){ map.removeLayer(trackLayer); trackLayer=null; }
+  const box=$("act"); if(!selected){ box.style.display="none"; return; }
+  const v=info(vessels.find(x=>x.mmsi===selected)), h=+$("hours").value, a=activity(selected,h);
+  const pts=(positions[selected]||[]).filter(p=>Date.parse(p.ts)>=Date.now()-h*3600e3);
+  if(pts.length>1) trackLayer=L.layerGroup([L.polyline(pts.map(p=>[p.lat,p.lon]),{color:"#2f9be0",weight:3,opacity:.85}),
+    ...pts.map(p=>L.circleMarker([p.lat,p.lon],{radius:3,color:SCOL[classify(p.sog,p.nav)],fillOpacity:1,weight:1}).bindTooltip(`${local(p.ts)} · ${fmt(p.sog)} kn`))]).addTo(map);
+  box.style.display="block";
+  box.innerHTML=`<b>${esc(v.label)}</b> <span class="job">${esc(v.job)}</span> – ${$("hours").selectedOptions[0].text.toLowerCase()}
+   <div class="bar">${a.segs.map(s=>`<span title="${s.state} ${s.hours.toFixed(1)} h" style="width:${100*s.hours/h}%;background:${SCOL[s.state]}"></span>`).join("")}</div>
+   <table class="at"><tr><th>Activity</th><th class="num">Hours</th><th class="num">%</th></tr>
+   ${STATES.filter(s=>a.totals[s]>0.01).map(s=>`<tr><td><span class="sw" style="background:${SCOL[s]}"></span>${s}</td><td class="num">${a.totals[s].toFixed(1)}</td><td class="num">${(100*a.totals[s]/h).toFixed(0)}%</td></tr>`).join("")}</table>
+   <table class="at" style="margin-top:8px"><tr><th>Start</th><th>Activity</th><th class="num">h</th><th class="num">Hs avg/max m</th><th class="num">Wind avg m/s</th><th>Position</th></tr>
+   ${a.segs.slice().reverse().map(s=>`<tr><td>${local(s.start)}</td><td><span class="sw" style="background:${SCOL[s.state]}"></span>${s.state}</td><td class="num">${s.hours.toFixed(1)}</td><td class="num">${fmt(s.hs)} / ${fmt(s.hs_max)}</td><td class="num">${fmt(s.wind)}</td><td>${s.lat!=null?fmt(s.lat,3)+", "+fmt(s.lon,3):"–"}</td></tr>`).join("")}</table>`;
+}
+
+function wAvg(a,k){ let h=0,x=0; for(const s of a.segs) if(s.state==="Stationary / working"&&s[k]!=null){ h+=s.hours; x+=s[k]*s.hours; } return h?fmt(x/h):"–"; }
+function renderFleet(){
+  const h=+$("hours").value;
+  const rows=shown().map(v=>({v:info(v),a:activity(v.mmsi,h)}));
+  $("fleet").innerHTML=`<h2>Fleet activity – ${$("hours").selectedOptions[0].text.toLowerCase()}</h2>
+   <p>Hours per activity from 15-min AIS positions. Working = speed &lt; 1 kn and not moored/anchored. Click a row to open the vessel.</p>
+   <table class="at"><tr><th>Vessel</th><th>Contractor</th><th>Type</th><th>Job</th>${STATES.map(s=>`<th class="num"><span class="sw" style="background:${SCOL[s]}"></span>${s}</th>`).join("")}<th class="num">Working % of covered time</th><th class="num">Hs while working (avg m)</th><th class="num">Wind while working (avg m/s)</th></tr>
+   ${rows.map(({v,a})=>{const cov=h-a.totals["No data"]; return `<tr data-f="${v.mmsi}"><td>${esc(v.label)}</td><td>${esc(v.contractor)}</td><td>${esc(v.vtype)}</td><td class="job">${esc(v.job)}</td>
+     ${STATES.map(s=>`<td class="num">${a.totals[s]?a.totals[s].toFixed(1):"–"}</td>`).join("")}
+     <td class="num">${cov>0.5?(100*a.totals["Stationary / working"]/cov).toFixed(0)+"%":"–"}</td>
+     <td class="num">${wAvg(a,"hs")}</td><td class="num">${wAvg(a,"wind")}</td></tr>`;}).join("")}</table>`;
+}
+
+function select(m,pan=true){
+  selected=(selected===m&&pan)?null:m; render();
+  const v=info(vessels.find(x=>x.mmsi===selected)||{});
+  if(selected&&v.lat!=null&&pan){ map.setView([v.lat,v.lon],Math.max(map.getZoom(),9)); markers[selected]?.openPopup(); }
+}
+function view(fleet){
+  $("tMap").classList.toggle("on",!fleet); $("tFleet").classList.toggle("on",fleet);
+  $("map").style.display=fleet?"none":""; $("side").style.display=fleet?"none":""; $("fleet").style.display=fleet?"block":"none";
+  if(!fleet) setTimeout(()=>map.invalidateSize(),50);
+}
+$("list").onclick=e=>{const r=e.target.closest("[data-m]"); if(r) select(r.dataset.m);};
+$("fleet").onclick=e=>{const r=e.target.closest("[data-f]"); if(r){ view(false); selected=null; select(r.dataset.f); }};
+$("tMap").onclick=()=>view(false); $("tFleet").onclick=()=>view(true);
+$("hours").onchange=render;
+$("ctr").onchange=()=>{ selected=null; firstFit=true; render(); };
+$("acsv").onclick=()=>{
+  const h=+$("hours").value, out=[["mmsi","vessel","contractor","type","job","activity","start_utc","end_utc","hours","lat","lon","avg_sog_kn","points","hs_avg_m","hs_max_m","wind_avg_ms","wind_max_ms"]];
+  for(const v0 of shown()){ const v=info(v0);
+    for(const s of activity(v.mmsi,h).segs) out.push([v.mmsi,v.label,v.contractor,v.vtype,v.job,s.state,new Date(s.start).toISOString(),new Date(s.end).toISOString(),
+      s.hours.toFixed(2),s.lat?.toFixed(5)??"",s.lon?.toFixed(5)??"",s.avg_sog?.toFixed(1)??"",s.pts.length,s.hs?.toFixed(2)??"",s.hs_max?.toFixed(2)??"",s.wind?.toFixed(1)??"",s.wind_max?.toFixed(1)??""]); }
+  const csv="﻿"+out.map(r=>r.map(c=>/[;"\n]/.test(String(c))?`"${String(c).replace(/"/g,'""')}"`:c).join(";")).join("\n");
+  const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
+  a.download=`vessel_activity_${new Date().toISOString().slice(0,10)}.csv`; a.click();
+};
+load(); setInterval(load,5*60e3);
+</script>
+</body>
+</html>
