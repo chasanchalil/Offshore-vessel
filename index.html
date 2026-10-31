@@ -6,6 +6,7 @@
 <title>Vessel Tracker</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="analysis.js"></script>
 <style>
 :root{--bg:#0f1720;--panel:#16212d;--line:#24364a;--txt:#e6edf3;--mut:#8aa0b4;--acc:#2f9be0;--ok:#2fbf71;--warn:#e0a92f;--bad:#e0563f}
 *{box-sizing:border-box}
@@ -37,15 +38,24 @@ table.at th{color:var(--mut);font-weight:500}
 table.at td.num,table.at th.num{text-align:right}
 .sw{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}
 .foot{padding:8px 12px;border-top:1px solid var(--line);font-size:12px;color:var(--mut);display:flex;gap:8px;flex-wrap:wrap}
-#fleet,#vuo{display:none;flex:1;overflow:auto;padding:16px}
-#vuo h2,#vuo h3{font-size:15px;margin:0 0 4px}#vuo p{color:var(--mut);font-size:12px;margin:0 0 12px}
-#vuo tr[data-u]{cursor:pointer}#vuo tr[data-u]:hover td{background:#1c2a39}
+#fleet,#vuo,#sites,#disc{display:none;flex:1;overflow:auto;padding:16px}
+.pane h2,.pane h3{font-size:15px;margin:0 0 4px}.pane p{color:var(--mut);font-size:12px;margin:0 0 12px}
+tr[data-u],tr[data-s],tr[data-d]{cursor:pointer}tr[data-u]:hover td,tr[data-s]:hover td,tr[data-d]:hover td{background:#1c2a39}
 .tag{display:inline-block;padding:1px 6px;border-radius:4px;background:#0b121a;border:1px solid var(--line);font-size:11px}
 #fleet h2{font-size:15px;margin:0 0 4px}
 #fleet p{color:var(--mut);font-size:12px;margin:0 0 12px}
 #fleet tr{cursor:pointer}#fleet tr:hover td{background:#1c2a39}
 .ship-ico{background:none;border:none}
 .leaflet-popup-content{font-size:13px;line-height:1.5}
+.gantt{position:relative;margin-top:10px}
+.grow{display:flex;align-items:center;border-bottom:1px solid var(--line);height:26px}
+.glab{width:150px;flex:none;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:6px}
+.gbar{position:relative;flex:1;height:16px;background:#0b121a;border-radius:3px}
+.gbar span{position:absolute;top:0;height:100%}
+.gaxis{display:flex;margin-left:150px;font-size:10px;color:var(--mut);position:relative;height:16px}
+.gaxis span{position:absolute;transform:translateX(-50%)}
+.rp{display:flex;gap:8px;align-items:center;margin:6px 0}.rp input{flex:1}
+.prog{height:8px;background:#0b121a;border-radius:4px;overflow:hidden;width:80px;display:inline-block;vertical-align:middle}.prog i{display:block;height:100%;background:var(--ok)}
 @media (max-width:760px){main{flex-direction:column}aside{width:100%;height:50%;border-right:none;border-bottom:1px solid var(--line)}}
 </style>
 </head>
@@ -55,7 +65,7 @@ table.at td.num,table.at th.num{text-align:right}
   <span class="pill" id="upd">Loading…</span>
   <span class="sp"></span>
   <select id="ctr"><option value="">All contractors</option></select>
-  <button id="tMap" class="on">Map</button><button id="tFleet">Fleet analysis</button><button id="tVuo">VUO</button>
+  <button id="tMap" class="on">Map</button><button id="tFleet">Fleet</button><button id="tVuo">VUO</button><button id="tSites">Sites</button><button id="tDisc">Discovery</button>
   <select id="hours">
     <option value="24">Last 24 h</option><option value="72">Last 3 d</option>
     <option value="168" selected>Last 7 d</option><option value="720">Last 30 d</option>
@@ -67,19 +77,18 @@ table.at td.num,table.at th.num{text-align:right}
     <div id="list"></div>
     <div id="act"></div>
     <div class="foot"><span class="g">● &lt;45 min</span><span class="a">● &lt;3 h</span><span class="r">● older</span><span class="n">● no data</span>
-      <span class="sp"></span><span>AIS: AISStream.io · Weather: <a href="https://open-meteo.com" style="color:var(--mut)">Open-Meteo.com</a> · Wind farms: EMODnet (CC BY 4.0) · v2.7</span></div>
+      <span class="sp"></span><span>AIS: AISStream.io · Weather: <a href="https://open-meteo.com" style="color:var(--mut)">Open-Meteo.com</a> · Wind farms: EMODnet (CC BY 4.0) · v3.0</span></div>
   </aside>
   <div id="map"></div>
-  <div id="fleet"></div>
-  <div id="vuo"></div>
+  <div id="fleet" class="pane"></div>
+  <div id="vuo" class="pane"></div>
+  <div id="sites" class="pane"></div>
+  <div id="disc" class="pane"></div>
 </main>
 <script>
 const NAV=["Under way (engine)","At anchor","Not under command","Restricted manoeuvrability","Constrained by draught","Moored","Aground","Fishing","Under way (sailing)","","","Towing astern","Pushing ahead","","AIS-SART","Not defined"];
-const STATES=["Stationary / working","Working (est.)","Slow / manoeuvring","Transit","Transit (est.)","At anchor","Moored","No data"];
-const SCOL={"Transit":"#2f9be0","Transit (est.)":"#7fc3f0","Slow / manoeuvring":"#9b7be0","Stationary / working":"#2fbf71","Working (est.)":"#8fdcb0","At anchor":"#e0a92f","Moored":"#8aa0b4","No data":"#3a4a5c"};
-const INTERVAL=15, GAP=50; // minutes
 const $=id=>document.getElementById(id);
-let vessels=[], latest={}, positions={}, weather={}, selected=null, firstFit=true;
+let vessels=[], latest={}, disc={vessels:{}}, selected=null, firstFit=true, mode="map", vuoSel=null, siteSel=null;
 const markers={}; let trackLayer=null;
 
 const map=L.map("map",{worldCopyJump:true}).setView([54.5,6],6);
@@ -87,49 +96,25 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:18,att
 const sea=L.tileLayer("https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png",{maxZoom:18,attribution:"© OpenSeaMap"}).addTo(map);
 const WFCOL={production:"#2fbf71",construction:"#e0a92f",approved:"#2f9be0",planned:"#8aa0b4","test site":"#9b7be0",dismantled:"#555"};
 const wfLayer=L.geoJSON(null,{style:f=>{const st=wfStatus(f.properties); return {color:WFCOL[st]||"#8aa0b4",weight:1.2,fillOpacity:st==="planned"?0.04:0.12,dashArray:st==="planned"?"4 4":null};},
-  onEachFeature:(f,l)=>{const p=f.properties,n=wfName(p); l.bindTooltip(esc(n),{sticky:true});
-    l.bindPopup(`<b>${esc(n)}</b><br>${esc(wfStatus(p))}${pick(p,["country","COUNTRY"])?" · "+esc(pick(p,["country","COUNTRY"])):""}${pick(p,["power_mw","POWER_MW","power"])?" · "+esc(pick(p,["power_mw","POWER_MW","power"]))+" MW":""}${pick(p,["n_turbines","N_TURBINES","turbines"])?" · "+esc(pick(p,["n_turbines","N_TURBINES","turbines"]))+" turbines":""}`);}}).addTo(map);
-L.control.layers(null,{"Wind farms":wfLayer,"Sea marks":sea}).addTo(map); L.control.scale({imperial:false}).addTo(map);
+  onEachFeature:(f,l)=>{const p=f.properties,n=wfName(p),tb=wfTurbines(p); l.bindTooltip(esc(n),{sticky:true});
+    l.bindPopup(`<b>${esc(n)}</b><br>${esc(wfStatus(p))}${pick(p,["country","COUNTRY"])?" · "+esc(pick(p,["country","COUNTRY"])):""}${pick(p,["power_mw","POWER_MW","power"])?" · "+esc(pick(p,["power_mw","POWER_MW","power"]))+" MW":""}${tb?" · "+tb+" turbines":""}`);}}).addTo(map);
+const discLayer=L.layerGroup();
+L.control.layers(null,{"Wind farms":wfLayer,"Discovered vessels":discLayer,"Sea marks":sea}).addTo(map); L.control.scale({imperial:false}).addTo(map);
 
-function pick(p,keys){ for(const k of keys) if(p&&p[k]!=null&&p[k]!=="") return p[k];
-  const lk=Object.keys(p||{}).find(k=>keys.some(x=>k.toLowerCase()===x.toLowerCase())); return lk?p[lk]:null; }
-const wfName=p=>pick(p,["name","NAME","Name","site_name","windfarm"])||"Wind farm";
-const wfStatus=p=>String(pick(p,["status","STATUS","Status"])||"").toLowerCase();
-let wfIndex=[];
-function inRing(x,y,r){ let c=false; for(let i=0,j=r.length-1;i<r.length;j=i++){ const xi=r[i][0],yi=r[i][1],xj=r[j][0],yj=r[j][1];
-  if(((yi>y)!==(yj>y))&&(x<(xj-xi)*(y-yi)/(yj-yi)+xi)) c=!c; } return c; }
-function inPoly(x,y,rings){ if(!inRing(x,y,rings[0])) return false; for(let k=1;k<rings.length;k++) if(inRing(x,y,rings[k])) return false; return true; }
-function windfarmAt(lat,lon){
-  for(const w of wfIndex){ if(lon<w.b[0]||lon>w.b[2]||lat<w.b[1]||lat>w.b[3]) continue;
-    for(const poly of w.polys) if(inPoly(lon,lat,poly)) return w.name; }
-  return null;
-}
-function buildWfIndex(gj){
-  wfIndex=[];
-  for(const f of gj.features||[]){ const g=f.geometry; if(!g) continue;
-    const polys=g.type==="Polygon"?[g.coordinates]:g.type==="MultiPolygon"?g.coordinates:[]; if(!polys.length) continue;
-    let b=[180,90,-180,-90]; for(const pl of polys) for(const [x,y] of pl[0]){ b=[Math.min(b[0],x),Math.min(b[1],y),Math.max(b[2],x),Math.max(b[3],y)]; }
-    wfIndex.push({name:wfName(f.properties),status:wfStatus(f.properties),b,polys}); }
-  wfIndex.sort((a,b)=>(a.status==="planned")-(b.status==="planned")); // prefer built/under construction
-}
-function hav(a,b){ const R=6371,t=Math.PI/180,dl=(b.lat-a.lat)*t,dn=(b.lon-a.lon)*t;
-  const x=Math.sin(dl/2)**2+Math.cos(a.lat*t)*Math.cos(b.lat*t)*Math.sin(dn/2)**2; return 2*R*Math.asin(Math.sqrt(x)); }
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const fmt=(x,d=1)=>x==null||x===""?"–":Number(x).toFixed(d);
+const fmt=(x,d=1)=>x==null||x===""||isNaN(x)?"–":Number(x).toFixed(d);
 const local=ts=>ts?new Date(ts).toLocaleString([], {dateStyle:"short",timeStyle:"short"}):"–";
 const ageMin=ts=>ts?(Date.now()-Date.parse(ts))/60000:null;
 const ageCls=m=>m==null?"n":m<45?"g":m<180?"a":"r";
 const ageTxt=m=>m==null?"no data":m<60?Math.round(m)+" min":m<2880?(m/60).toFixed(1)+" h":Math.round(m/1440)+" d";
+const per=()=>$("hours").selectedOptions[0].text.toLowerCase();
+const H=()=>+$("hours").value;
 
-function parseCSV(txt){
-  const lines=txt.trim().split(/\r?\n/); const h=lines.shift().split(",");
-  return lines.map(l=>{const c=l.split(","),o={}; h.forEach((k,i)=>o[k]=c[i]===""?null:c[i]); return o;});
-}
 // Data is read straight from the repository (updated every 15 min); falls back to the published copy
 const RAW=(()=>{ const h=location.hostname, seg=location.pathname.split("/").filter(Boolean)[0];
   return h.endsWith(".github.io")&&seg?`https://raw.githubusercontent.com/${h.split(".")[0]}/${seg}/main/`:""; })();
 async function getText(url){
-  if(RAW&&url.startsWith("data/")){ try{ const r=await fetch(RAW+url+"?t="+Date.now()); if(r.ok) return r.text(); }catch(e){} }
+  if(RAW&&(url.startsWith("data/")||url==="limits.json")){ try{ const r=await fetch(RAW+url+"?t="+Date.now()); if(r.ok) return r.text(); }catch(e){} }
   const r=await fetch(url+"?t="+Date.now()); if(!r.ok) throw new Error(r.status); return r.text(); }
 
 async function load(){
@@ -137,27 +122,16 @@ async function load(){
   const cur=$("ctr").value, cs=[...new Set(vessels.map(v=>v.contractor).filter(Boolean))];
   $("ctr").innerHTML='<option value="">All contractors</option>'+cs.map(c=>`<option ${c===cur?"selected":""}>${esc(c)}</option>`).join("");
   try{ latest=JSON.parse(await getText("data/latest.json")); }catch(e){ latest={vessels:{}}; }
+  try{ LIMIT_OVERRIDE=JSON.parse(await getText("limits.json")); }catch(e){ LIMIT_OVERRIDE={}; }
+  try{ disc=JSON.parse(await getText("data/discovery.json")); }catch(e){ disc={vessels:{}}; }
   const now=new Date(), months=[];
   for(let i=1;i>=0;i--){ const d=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth()-i,1)); months.push(d.toISOString().slice(0,7)); }
-  positions={};
+  resetData();
   for(const m of months){
-    try{
-      for(const r of parseCSV(await getText(`data/positions_${m}.csv`))){
-        (positions[r.mmsi]??=[]).push({ts:r.ts_utc,lat:+r.lat,lon:+r.lon,sog:r.sog==null?null:+r.sog,cog:r.cog==null?null:+r.cog,nav:r.nav_status==null?null:+r.nav_status});
-      }
-    }catch(e){}
+    try{ loadPositions(parseCSV(await getText(`data/positions_${m}.csv`))); }catch(e){}
+    try{ loadWeather(parseCSV(await getText(`data/weather_${m}.csv`))); }catch(e){}
   }
-  for(const k in positions) positions[k].sort((a,b)=>a.ts<b.ts?-1:1);
-  weather={};
-  for(const m of months){
-    try{
-      for(const r of parseCSV(await getText(`data/weather_${m}.csv`))){
-        const n=x=>x==null?null:+x;
-        (weather[r.mmsi]??=[]).push({ts:r.ts_utc,wind:n(r.wind_ms),gust:n(r.gust_ms),hs:n(r.hs_m),tp:n(r.tp_s)});
-      }
-    }catch(e){}
-  }
-  for(const k in weather) weather[k].sort((a,b)=>a.ts<b.ts?-1:1);
+  sortAll();
   if(!wfIndex.length){ try{ const gj=JSON.parse(await getText("data/windfarms.geojson")); wfLayer.clearLayers(); wfLayer.addData(gj); buildWfIndex(gj); }catch(e){} }
   const lr=latest.last_run;
   $("upd").textContent = lr ? `Updated ${local(lr.utc)} · ${lr.received}/${lr.tracked} this slot · ${lr.ever_seen??"?"}/${lr.tracked} seen` : "No data yet – run the workflow once";
@@ -165,52 +139,7 @@ async function load(){
 }
 
 function info(v){ return Object.assign({mmsi:v.mmsi,label:v.name||v.mmsi,job:v.job||"",contractor:v.contractor||"",vtype:v.type||""}, latest.vessels?.[v.mmsi]||{}); }
-
-function classify(sog,nav){
-  if(nav===5) return "Moored"; if(nav===1) return "At anchor";
-  if(sog==null) return nav===0?"Transit":"Stationary / working";
-  if(sog<1) return "Stationary / working"; if(sog<5) return "Slow / manoeuvring"; return "Transit";
-}
-// What happened during an AIS gap? Same spot before and after -> vessel stayed there.
-const WORK_FILL_MAX_H=48;
-function gapFill(p,q,st,km,kn,dt){
-  if(!q) return "No data";
-  const stQ=classify(q.sog,q.nav);
-  if(km<1&&dt<=WORK_FILL_MAX_H*3600e3){
-    const working=s=>s==="Stationary / working"||s==="Slow / manoeuvring";
-    if(working(st)&&working(stQ)&&(!wfIndex.length||windfarmAt(p.lat,p.lon))) return "Working (est.)";
-    if(st===stQ&&(st==="Moored"||st==="At anchor")) return st;
-  }
-  if(km>5&&kn>=3) return "Transit (est.)";
-  return "No data";
-}
-function activity(mmsi,hours){
-  const end=Date.now(), start=end-hours*3600e3;
-  const pts=(positions[mmsi]||[]).filter(p=>Date.parse(p.ts)>=start);
-  const segs=[];
-  const push=(state,t0,t1,p)=>{ if(t1<=t0) return; const l=segs[segs.length-1];
-    if(l&&l.state===state){ l.end=t1; if(p) l.pts.push(p); } else segs.push({state,start:t0,end:t1,pts:p?[p]:[]}); };
-  if(pts.length) push("No data",start,Date.parse(pts[0].ts),null); else push("No data",start,end,null);
-  pts.forEach((p,i)=>{
-    const t=Date.parse(p.ts), tn=i+1<pts.length?Date.parse(pts[i+1].ts):Math.min(end,t+INTERVAL*60e3);
-    const st=classify(p.sog,p.nav);
-    if(tn-t>GAP*60e3){ push(st,t,t+INTERVAL*60e3,p);
-      const q=i+1<pts.length?pts[i+1]:null, km=q?hav(p,q):0, kn=q?(km/1.852)/((tn-t)/3600e3):0;
-      push(gapFill(p,q,st,km,kn,tn-t),t+INTERVAL*60e3,tn,null); }
-    else push(st,t,tn,p);
-  });
-  if(pts.length){ const lt=Date.parse(pts[pts.length-1].ts)+INTERVAL*60e3; if(lt<end) push("No data",lt,end,null); }
-  const wx=(weather[mmsi]||[]);
-  const totals={}; STATES.forEach(s=>totals[s]=0);
-  for(const s of segs){ s.hours=(s.end-s.start)/3600e3; totals[s.state]+=s.hours;
-    if(s.pts.length){ s.lat=s.pts.reduce((a,p)=>a+p.lat,0)/s.pts.length; s.lon=s.pts.reduce((a,p)=>a+p.lon,0)/s.pts.length;
-      const sg=s.pts.filter(p=>p.sog!=null); s.avg_sog=sg.length?sg.reduce((a,p)=>a+p.sog,0)/sg.length:null; }
-    const w=wx.filter(x=>{const t=Date.parse(x.ts); return t>=s.start-30*60e3&&t<s.end;});
-    const avg=k=>{const v=w.map(x=>x[k]).filter(x=>x!=null); return v.length?v.reduce((a,b)=>a+b,0)/v.length:null;};
-    const mx=k=>{const v=w.map(x=>x[k]).filter(x=>x!=null); return v.length?Math.max(...v):null;};
-    s.hs=avg("hs"); s.hs_max=mx("hs"); s.wind=avg("wind"); s.wind_max=mx("wind"); }
-  return {segs,totals};
-}
+const shown=()=>vessels.filter(v=>!$("ctr").value||v.contractor===$("ctr").value);
 
 function icon(v){
   const col={g:"#2fbf71",a:"#e0a92f",r:"#e0563f",n:"#8aa0b4"}[ageCls(ageMin(v.ts_utc))];
@@ -220,21 +149,22 @@ function icon(v){
   return L.divIcon({className:"ship-ico",iconSize:[24,24],iconAnchor:[12,12],
     html:`<svg width="24" height="24" viewBox="0 0 24 24" style="transform:rotate(${mov?rot:0}deg)"><g fill="${col}" ${sel}>${shape}</g></svg>`});
 }
+function where(v){ if(v.lat==null) return ""; const wf=windfarmAt(v.lat,v.lon); if(wf) return "📍 "+wf; const pt=portAt(v.lat,v.lon); return pt?"⚓ "+pt:""; }
 function popup(v){
   const nav=v.nav_status!=null&&NAV[v.nav_status]?NAV[v.nav_status]:"–";
   return `<b>${esc(v.label)}</b> · ${esc(v.contractor)} ${esc(v.vtype)}${v.job?" · "+esc(v.job):""}<br>MMSI ${v.mmsi}${v.imo?" · IMO "+esc(v.imo):""}${v.length?` · ${v.length}×${v.beam??"?"} m`:""}<br>
-  SOG ${fmt(v.sog)} kn · COG ${fmt(v.cog,0)}° · ${nav}<br>${v.destination?"→ "+esc(v.destination)+(v.eta?" (ETA "+esc(v.eta)+")":"")+"<br>":""}
+  ${where(v)?esc(where(v))+"<br>":""}SOG ${fmt(v.sog)} kn · COG ${fmt(v.cog,0)}° · ${nav}<br>${v.destination?"→ "+esc(v.destination)+(v.eta?" (ETA "+esc(v.eta)+")":"")+"<br>":""}
   ${v.weather?`Hs ${fmt(v.weather.hs_m)} m · Tp ${fmt(v.weather.tp_s,0)} s · Wind ${fmt(v.weather.wind_ms)} m/s (gust ${fmt(v.weather.gust_ms)}) · ${local(v.weather.ts_utc)}<br>`:""}
   ${fmt(v.lat,4)}, ${fmt(v.lon,4)}<br>Last: ${local(v.ts_utc)} (${ageTxt(ageMin(v.ts_utc))} ago)`;
 }
 
-const shown=()=>vessels.filter(v=>!$("ctr").value||v.contractor===$("ctr").value);
 function render(){
   const list=shown().map(info);
-  $("list").innerHTML=list.map(v=>{const m=ageMin(v.ts_utc), nav=v.nav_status!=null&&NAV[v.nav_status]?NAV[v.nav_status]:"–";
+  $("list").innerHTML=list.map(v=>{const m=ageMin(v.ts_utc);
     return `<div class="v ${v.mmsi===selected?"sel":""}" data-m="${v.mmsi}">
       <div class="t"><span class="${ageCls(m)}">●</span>${esc(v.label)} <span class="job">${esc(v.contractor)} · ${esc(v.vtype)}${v.job?" · "+esc(v.job):""}</span><span class="age ${ageCls(m)}">${ageTxt(m)}</span></div>
       <div class="m"><span>SOG ${fmt(v.sog)} kn · COG ${fmt(v.cog,0)}°</span><span>${v.lat!=null?classify(v.sog==null?null:+v.sog,v.nav_status):"–"}</span>
+      ${where(v)?`<span style="grid-column:1/3">${esc(where(v))}</span>`:""}
       ${v.weather?`<span style="grid-column:1/3">🌊 Hs ${fmt(v.weather.hs_m)} m · Tp ${fmt(v.weather.tp_s,0)} s · 💨 ${fmt(v.weather.wind_ms)} m/s (gust ${fmt(v.weather.gust_ms)})</span>`:""}
       ${v.destination?`<span style="grid-column:1/3">→ ${esc(v.destination)}</span>`:""}</div></div>`;}).join("");
   const seen=new Set();
@@ -243,69 +173,71 @@ function render(){
     markers[v.mmsi].setLatLng([v.lat,v.lon]).setIcon(icon(v)).setPopupContent(popup(v)).setTooltipContent(esc(v.label)); }
   for(const k in markers) if(!seen.has(k)){ map.removeLayer(markers[k]); delete markers[k]; }
   if(firstFit&&seen.size){ firstFit=false; map.fitBounds(list.filter(v=>v.lat!=null).map(v=>[v.lat,v.lon]),{padding:[40,40],maxZoom:10}); }
-  renderAct(); renderFleet(); if($("vuo").style.display==="block") renderVuo();
+  renderDiscLayer();
+  if(mode==="map") renderAct(); if(mode==="fleet") renderFleet(); if(mode==="vuo") renderVuo();
+  if(mode==="sites") renderSites(); if(mode==="disc") renderDisc();
 }
 
+/* ---- vessel panel + track replay ---- */
+let replay={timer:null,i:0,pts:[],mk:null};
+function stopReplay(){ if(replay.timer){ clearInterval(replay.timer); replay.timer=null; } const b=$("rpPlay"); if(b) b.textContent="▶"; }
+function showReplay(i){
+  const p=replay.pts[i]; if(!p) return; replay.i=i;
+  if(!replay.mk) replay.mk=L.circleMarker([p.lat,p.lon],{radius:8,color:"#fff",weight:2,fillColor:"#2f9be0",fillOpacity:1}).addTo(map);
+  replay.mk.setLatLng([p.lat,p.lon]); if($("rpSlider")) $("rpSlider").value=i;
+  const wf=windfarmAt(p.lat,p.lon), pt=wf?null:portAt(p.lat,p.lon);
+  if($("rpLab")) $("rpLab").textContent=`${local(p.ts)} · ${fmt(p.sog)} kn · ${classify(p.sog,p.nav)}${wf?" · "+wf:pt?" · "+pt:""}`;
+}
 function renderAct(){
+  stopReplay(); if(replay.mk){ map.removeLayer(replay.mk); replay.mk=null; }
   if(trackLayer){ map.removeLayer(trackLayer); trackLayer=null; }
   const box=$("act"); if(!selected){ box.style.display="none"; return; }
-  const v=info(vessels.find(x=>x.mmsi===selected)), h=+$("hours").value, a=activity(selected,h);
+  const v=info(vessels.find(x=>x.mmsi===selected)), h=H(), a=activity(selected,h,v.vtype);
   const pts=(positions[selected]||[]).filter(p=>Date.parse(p.ts)>=Date.now()-h*3600e3);
+  replay.pts=pts;
   if(pts.length>1) trackLayer=L.layerGroup([L.polyline(pts.map(p=>[p.lat,p.lon]),{color:"#2f9be0",weight:3,opacity:.85}),
     ...pts.map(p=>L.circleMarker([p.lat,p.lon],{radius:3,color:SCOL[classify(p.sog,p.nav)],fillOpacity:1,weight:1}).bindTooltip(`${local(p.ts)} · ${fmt(p.sog)} kn`))]).addTo(map);
   box.style.display="block";
-  box.innerHTML=`<b>${esc(v.label)}</b> <span class="job">${esc(v.job)}</span> – ${$("hours").selectedOptions[0].text.toLowerCase()}
+  box.innerHTML=`<b>${esc(v.label)}</b> <span class="job">${esc(v.job)}</span> – ${per()}
+   ${pts.length>1?`<div class="rp"><button id="rpPlay">▶</button><input type="range" id="rpSlider" min="0" max="${pts.length-1}" value="0"><select id="rpSpeed"><option value="300">1×</option><option value="120" selected>2×</option><option value="40">5×</option></select></div><div id="rpLab" style="font-size:12px;color:var(--mut)">Track replay – press ▶</div>`:""}
    <div class="bar">${a.segs.map(s=>`<span title="${s.state} ${s.hours.toFixed(1)} h" style="width:${100*s.hours/h}%;background:${SCOL[s.state]}"></span>`).join("")}</div>
    <table class="at"><tr><th>Activity</th><th class="num">Hours</th><th class="num">%</th></tr>
    ${STATES.filter(s=>a.totals[s]>0.01).map(s=>`<tr><td><span class="sw" style="background:${SCOL[s]}"></span>${s}</td><td class="num">${a.totals[s].toFixed(1)}</td><td class="num">${(100*a.totals[s]/h).toFixed(0)}%</td></tr>`).join("")}</table>
-   <table class="at" style="margin-top:8px"><tr><th>Start</th><th>Activity</th><th class="num">h</th><th class="num">Hs avg/max m</th><th class="num">Wind avg m/s</th><th>Position</th></tr>
-   ${a.segs.slice().reverse().map(s=>`<tr><td>${local(s.start)}</td><td><span class="sw" style="background:${SCOL[s.state]}"></span>${s.state}</td><td class="num">${s.hours.toFixed(1)}</td><td class="num">${fmt(s.hs)} / ${fmt(s.hs_max)}</td><td class="num">${fmt(s.wind)}</td><td>${s.lat!=null?fmt(s.lat,3)+", "+fmt(s.lon,3):"–"}</td></tr>`).join("")}</table>`;
+   <p style="font-size:11px;color:var(--mut);margin:4px 0">Weather limit for ${esc(v.vtype||"this vessel")}: Hs ${a.limits.hs} m · wind ${a.limits.wind} m/s</p>
+   <table class="at" style="margin-top:8px"><tr><th>Start</th><th>Activity</th><th class="num">h</th><th>Where</th><th class="num">Hs avg/max m</th><th class="num">Wind avg m/s</th></tr>
+   ${a.segs.slice().reverse().map(s=>`<tr><td>${local(s.start)}</td><td><span class="sw" style="background:${SCOL[s.state]}"></span>${s.state}</td><td class="num">${s.hours.toFixed(1)}</td><td>${esc(s.wf||s.port||(s.lat!=null?fmt(s.lat,2)+", "+fmt(s.lon,2):"–"))}</td><td class="num">${fmt(s.hs)} / ${fmt(s.hs_max)}</td><td class="num">${fmt(s.wind)}</td></tr>`).join("")}</table>`;
+  if(pts.length>1){
+    $("rpSlider").oninput=e=>{ stopReplay(); showReplay(+e.target.value); };
+    $("rpPlay").onclick=()=>{ if(replay.timer){ stopReplay(); return; }
+      if(replay.i>=pts.length-1) replay.i=0; $("rpPlay").textContent="❚❚";
+      replay.timer=setInterval(()=>{ if(replay.i>=pts.length-1){ stopReplay(); return; } showReplay(replay.i+1); },+$("rpSpeed").value); };
+  }
 }
 
-const isCLV=v=>/CLV|cable/i.test(v.vtype||"");
-function vuo(mmsi,hours){
-  const start=Date.now()-hours*3600e3, pts=(positions[mmsi]||[]).filter(p=>Date.parse(p.ts)>=start);
-  const wx=weather[mmsi]||[], hsAt=(t0,t1)=>{const v=wx.filter(x=>{const t=Date.parse(x.ts);return t>=t0-30*60e3&&t<=t1;}).map(x=>x.hs).filter(x=>x!=null);return v.length?v.reduce((a,b)=>a+b,0)/v.length:null;};
-  const still=p=>p.nav!==5&&p.nav!==1&&(p.sog!=null?p.sog<1:p.nav!==0);
-  // stops = stationary at one spot offshore (installation positions / pull-ins)
-  const stops=[]; let cur=null;
-  for(const p of pts){
-    if(still(p)&&cur&&hav(cur.c,p)<0.3&&Date.parse(p.ts)-cur.last<12*3600e3){ cur.n++; cur.last=Date.parse(p.ts); continue; }
-    if(cur){ stops.push(cur); cur=null; }
-    if(still(p)) cur={c:{lat:p.lat,lon:p.lon},first:Date.parse(p.ts),last:Date.parse(p.ts),n:1};
-  }
-  if(cur) stops.push(cur);
-  let st=stops.map(s=>({lat:s.c.lat,lon:s.c.lon,start:s.first,end:s.last+INTERVAL*60e3,h:(s.last-s.first)/3600e3+INTERVAL/60}))
-    .filter(s=>s.h>=2&&s.h<=96);
-  const merged=[]; for(const s of st){ const l=merged[merged.length-1];
-    if(l&&hav(l,s)<0.5){ l.end=s.end; l.h+=s.h; } else merged.push({...s}); }
-  for(const s of merged){ s.wf=windfarmAt(s.lat,s.lon); s.hs=hsAt(s.start,s.end); }
-  const haveWF=wfIndex.length>0, site=merged.filter(s=>!haveWF||s.wf);
-  // lay = slow continuous progress (cable lay / trenching)
-  const lays=[]; let L0=null;
-  pts.forEach((p,i)=>{ const slow=p.nav!==5&&p.nav!==1&&p.sog!=null&&p.sog>=0.05&&p.sog<1.5, prev=pts[i-1];
-    const cont=L0&&prev&&Date.parse(p.ts)-Date.parse(prev.ts)<=GAP*60e3;
-    if(slow&&cont){ L0.km+=hav(prev,p); L0.end=Date.parse(p.ts); L0.pts.push(p); }
-    else{ if(L0) lays.push(L0); L0=slow?{start:Date.parse(p.ts),end:Date.parse(p.ts),km:0,pts:[p]}:null; } });
-  if(L0) lays.push(L0);
-  const lay=lays.map(l=>{ const m=l.pts[Math.floor(l.pts.length/2)]; return {start:l.start,end:l.end+INTERVAL*60e3,h:(l.end-l.start)/3600e3+INTERVAL/60,km:l.km,lat:m.lat,lon:m.lon,wf:windfarmAt(m.lat,m.lon),hs:hsAt(l.start,l.end)}; })
-    .filter(l=>l.km>=0.5&&l.h>=1);
-  const a=activity(mmsi,hours), portCalls=a.segs.filter(s=>s.state==="Moored"&&s.hours>=2).length;
-  const wfs={}; for(const s of [...site,...lay]) if(s.wf) wfs[s.wf]=(wfs[s.wf]||0)+s.h;
-  return {a,site,stops:merged,lay,portCalls,wfs:Object.entries(wfs).sort((x,y)=>y[1]-x[1]).map(x=>x[0])};
+/* ---- Fleet ---- */
+function wAvg(a,k){ let h=0,x=0; for(const s of a.segs) if(WORK_STATES.includes(s.state)&&s[k]!=null){ h+=s.hours; x+=s[k]*s.hours; } return h?fmt(x/h):"–"; }
+function renderFleet(){
+  const h=H(), rows=shown().map(v0=>{const v=info(v0); return {v,a:activity(v.mmsi,h,v.vtype)};});
+  $("fleet").innerHTML=`<h2>Fleet activity – ${per()}</h2>
+   <p>Hours per activity from 15-min AIS. Working = &lt; 1 kn and not moored/anchored. <b>Waiting on weather</b> = working/stationary offshore while Hs or wind is above the vessel-type limit. Click a row to open the vessel.</p>
+   <table class="at"><tr><th>Vessel</th><th>Contractor</th><th>Type</th>${STATES.map(s=>`<th class="num"><span class="sw" style="background:${SCOL[s]}"></span>${s}</th>`).join("")}<th class="num">Working % of covered</th><th class="num">Hs working</th><th class="num">Wind working</th></tr>
+   ${rows.map(({v,a})=>{const cov=h-a.totals["No data"], wk=WORK_STATES.reduce((s,k)=>s+a.totals[k],0); return `<tr data-f="${v.mmsi}" style="cursor:pointer"><td>${esc(v.label)}</td><td>${esc(v.contractor)}</td><td>${esc(v.vtype)}</td>
+     ${STATES.map(s=>`<td class="num">${a.totals[s]?a.totals[s].toFixed(1):"–"}</td>`).join("")}
+     <td class="num">${cov>0.5?(100*wk/cov).toFixed(0)+"%":"–"}</td><td class="num">${wAvg(a,"hs")}</td><td class="num">${wAvg(a,"wind")}</td></tr>`;}).join("")}</table>`;
 }
-let vuoSel=null;
+
+/* ---- VUO ---- */
 function renderVuo(){
-  const h=+$("hours").value, per=$("hours").selectedOptions[0].text.toLowerCase();
-  const rows=shown().map(v0=>{const v=info(v0); return {v,r:vuo(v.mmsi,h)};});
+  const h=H(), rows=shown().map(v0=>{const v=info(v0); return {v,r:vuo(v.mmsi,h,v.vtype)};});
   const pct=(a,k)=>{const x=k.reduce((s,kk)=>s+(a.totals[kk]||0),0); return x>0.05?(100*x/h).toFixed(0)+"%":"–";};
-  let html=`<h2>VUO – Vessel utilisation overview (${per})</h2>
-   <p>Estimated from 15-min AIS. <b>Installation vessels:</b> each stationary stop of 2–96 h at a separate spot (&gt;500 m apart)${wfIndex.length?" inside a wind farm":""} ≈ one installation position.
-   <b>CLVs:</b> slow continuous progress (0.05–1.5 kn) ≈ cable lay / trenching, length = distance sailed. AIS gaps where the vessel is at the same spot before and after (&lt;1 km, ≤48 h) inside a wind farm count as <b>Working (est.)</b>. Estimates – typical accuracy ±10–20%.</p>
-   <table class="at"><tr><th>Vessel</th><th>Contractor</th><th>Type</th><th class="num">Work</th><th class="num">Transit</th><th class="num">Port</th><th class="num">Anchor</th><th class="num">No data</th><th class="num">Port calls</th><th class="num">Installs (est.)</th><th class="num">h / install</th><th class="num">Cable km (est.)</th><th class="num">km / day lay</th><th>Wind farm(s)</th></tr>`;
-  for(const {v,r} of rows){ const clv=isCLV(v), km=r.lay.reduce((s,l)=>s+l.km,0), layH=r.lay.reduce((s,l)=>s+l.h,0);
+  let html=`<h2>VUO – Vessel utilisation overview (${per()})</h2>
+   <p><b>Installation vessels:</b> each stationary stop of 2–96 h at a separate spot (&gt;500 m apart)${wfIndex.length?" inside a wind farm":""} ≈ one installation position.
+   <b>CLVs:</b> slow continuous progress (0.05–1.5 kn) ≈ cable lay / trenching. Same-spot AIS gaps inside a wind farm (&lt;1 km, ≤48 h) count as <b>Working (est.)</b>; hours above the weather limit as <b>Waiting on weather</b>.
+   Limits: ${DEFAULT_LIMITS.map(l=>`${l.match||"HLV/other"} Hs ${l.hs} m / ${l.wind} m/s`).join(" · ")}. Estimates – typical accuracy ±10–20%.</p>
+   <table class="at"><tr><th>Vessel</th><th>Contractor</th><th>Type</th><th class="num">Work</th><th class="num">WoW</th><th class="num">Transit</th><th class="num">Port</th><th class="num">Anchor</th><th class="num">No data</th><th class="num">Port calls</th><th class="num">Installs (est.)</th><th class="num">h / install</th><th class="num">Cable km</th><th class="num">km / day</th><th>Wind farm(s)</th></tr>`;
+  for(const {v,r} of rows){ const clv=isCLV(v.vtype), km=r.lay.reduce((s,l)=>s+l.km,0), layH=r.lay.reduce((s,l)=>s+l.h,0);
     html+=`<tr data-u="${v.mmsi}" ${vuoSel===v.mmsi?'style="background:#1c2a39"':""}><td>${esc(v.label)}</td><td>${esc(v.contractor)}</td><td>${esc(v.vtype)}</td>
-     <td class="num">${pct(r.a,["Stationary / working","Working (est.)","Slow / manoeuvring"])}</td><td class="num">${pct(r.a,["Transit","Transit (est.)"])}</td>
+     <td class="num">${pct(r.a,WORK_STATES)}</td><td class="num">${pct(r.a,["Waiting on weather"])}</td><td class="num">${pct(r.a,["Transit","Transit (est.)"])}</td>
      <td class="num">${pct(r.a,["Moored"])}</td><td class="num">${pct(r.a,["At anchor"])}</td><td class="num">${pct(r.a,["No data"])}</td>
      <td class="num">${r.portCalls||"–"}</td>
      <td class="num">${clv?"–":(r.site.length||"–")}</td><td class="num">${!clv&&r.site.length?(r.site.reduce((s,x)=>s+x.h,0)/r.site.length).toFixed(1):"–"}</td>
@@ -313,26 +245,66 @@ function renderVuo(){
      <td>${r.wfs.slice(0,2).map(esc).join(", ")||"–"}</td></tr>`; }
   html+="</table>";
   const sel=rows.find(x=>x.v.mmsi===vuoSel);
-  if(sel){ const {v,r}=sel, clv=isCLV(v);
-    html+=`<h3 style="margin-top:18px">${esc(v.label)} – ${clv?"lay / trench segments":"installation positions"} (${per})</h3>`;
-    const list=clv?r.lay:r.site;
+  if(sel){ const {v,r}=sel, clv=isCLV(v.vtype), list=clv?r.lay:r.site;
+    html+=`<h3 style="margin-top:18px">${esc(v.label)} – ${clv?"lay / trench segments":"installation positions"} (${per()})</h3>`;
     html+=list.length?`<table class="at"><tr><th>#</th><th>Start</th><th class="num">Hours</th>${clv?'<th class="num">km</th>':""}<th>Wind farm</th><th class="num">Hs avg m</th><th>Position</th></tr>
       ${list.map((s,i)=>`<tr><td>${i+1}</td><td>${local(s.start)}</td><td class="num">${s.h.toFixed(1)}</td>${clv?`<td class="num">${s.km.toFixed(2)}</td>`:""}<td>${esc(s.wf||"–")}</td><td class="num">${fmt(s.hs)}</td><td>${fmt(s.lat,4)}, ${fmt(s.lon,4)}</td></tr>`).join("")}</table>`
       :`<p>No ${clv?"lay segments":"installation stops"} detected in this period yet.</p>`;
+    html+=`<h3 style="margin-top:18px">Port calls</h3>`+(r.calls.length?`<table class="at"><tr><th>Port</th><th>Arrived</th><th class="num">Hours</th></tr>${r.calls.map(c=>`<tr><td>${esc(c.port)}</td><td>${local(c.start)}</td><td class="num">${c.h.toFixed(1)}</td></tr>`).join("")}</table>`:"<p>None in this period.</p>");
   }
   $("vuo").innerHTML=html;
 }
-function wAvg(a,k){ let h=0,x=0; for(const s of a.segs) if((s.state==="Stationary / working"||s.state==="Working (est.)")&&s[k]!=null){ h+=s.hours; x+=s[k]*s.hours; } return h?fmt(x/h):"–"; }
-function renderFleet(){
-  const h=+$("hours").value;
-  const rows=shown().map(v=>({v:info(v),a:activity(v.mmsi,h)}));
-  $("fleet").innerHTML=`<h2>Fleet activity – ${$("hours").selectedOptions[0].text.toLowerCase()}</h2>
-   <p>Hours per activity from 15-min AIS positions. Working = speed &lt; 1 kn and not moored/anchored. Click a row to open the vessel.</p>
-   <table class="at"><tr><th>Vessel</th><th>Contractor</th><th>Type</th><th>Job</th>${STATES.map(s=>`<th class="num"><span class="sw" style="background:${SCOL[s]}"></span>${s}</th>`).join("")}<th class="num">Working % of covered time</th><th class="num">Hs while working (avg m)</th><th class="num">Wind while working (avg m/s)</th></tr>
-   ${rows.map(({v,a})=>{const cov=h-a.totals["No data"]; return `<tr data-f="${v.mmsi}"><td>${esc(v.label)}</td><td>${esc(v.contractor)}</td><td>${esc(v.vtype)}</td><td class="job">${esc(v.job)}</td>
-     ${STATES.map(s=>`<td class="num">${a.totals[s]?a.totals[s].toFixed(1):"–"}</td>`).join("")}
-     <td class="num">${cov>0.5?(100*(a.totals["Stationary / working"]+a.totals["Working (est.)"])/cov).toFixed(0)+"%":"–"}</td>
-     <td class="num">${wAvg(a,"hs")}</td><td class="num">${wAvg(a,"wind")}</td></tr>`;}).join("")}</table>`;
+
+/* ---- Sites (wind farm view + Gantt) ---- */
+function renderSites(){
+  const h=H(), list=shown().map(v0=>{const v=info(v0); return {mmsi:v.mmsi,label:v.label,contractor:v.contractor,vtype:v.vtype};});
+  const S=siteSummary(list,h);
+  let html=`<h2>Wind farms – ${per()}</h2><p>Sites where tracked vessels spent time. Installs = estimated foundation/turbine positions by installation vessels in this period; progress compares them with the wind farm's turbine count (EMODnet) – a rough indicator only, as earlier work and untracked vessels are not included. Click a site for its Gantt.</p>`;
+  if(!S.length){ $("sites").innerHTML=html+"<p>No vessel time inside wind farms yet.</p>"; return; }
+  html+=`<table class="at"><tr><th>Wind farm</th><th>Status</th><th class="num">Vessels</th><th class="num">Vessel-hours</th><th class="num">Working h</th><th class="num">WoW h</th><th class="num">Installs (est.)</th><th class="num">Cable km</th><th>Progress (est.)</th><th>Last activity</th></tr>
+   ${S.map(s=>{const pr=s.turbines?Math.min(100,100*s.installs/s.turbines):null; return `<tr data-s="${esc(s.name)}" ${siteSel===s.name?'style="background:#1c2a39"':""}><td>${esc(s.name)}</td><td>${esc(s.status)}</td><td class="num">${s.vesselList.length}</td><td class="num">${s.hours.toFixed(0)}</td><td class="num">${s.work.toFixed(0)}</td><td class="num">${s.wow.toFixed(0)}</td><td class="num">${s.installs||"–"}</td><td class="num">${s.km?s.km.toFixed(1):"–"}</td>
+     <td>${pr!=null?`<span class="prog"><i style="width:${pr}%"></i></span> ${s.installs}/${s.turbines}`:"–"}</td><td>${local(s.last)}</td></tr>`;}).join("")}</table>`;
+  const s=S.find(x=>x.name===siteSel);
+  if(s){
+    const end=Date.now(), start=end-h*3600e3, X=t=>Math.max(0,Math.min(100,100*(t-start)/(end-start)));
+    const days=[]; for(let d=new Date(start); d<=end; d=new Date(d.getTime()+86400e3)){ const m=new Date(d); m.setHours(0,0,0,0); if(m.getTime()>=start) days.push(m.getTime()); }
+    const step=Math.ceil(days.length/10);
+    html+=`<h3 style="margin-top:18px">${esc(s.name)} – vessel Gantt (${per()})</h3>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--mut)">${STATES.filter(x=>x!=="No data").map(x=>`<span><span class="sw" style="background:${SCOL[x]}"></span>${x}</span>`).join("")}</div>
+      <div class="gantt"><div class="gaxis">${days.filter((d,i)=>i%step===0).map(d=>`<span style="left:${X(d)}%">${new Date(d).toLocaleDateString([], {day:"2-digit",month:"2-digit"})}</span>`).join("")}</div>
+      ${s.vesselList.map(V=>`<div class="grow"><div class="glab" title="${esc(V.v.label)}">${esc(V.v.label)}</div><div class="gbar">${V.segs.map(g=>`<span title="${g.state} · ${local(g.start)} · ${g.hours.toFixed(1)} h" style="left:${X(g.start)}%;width:${Math.max(0.3,X(g.end)-X(g.start))}%;background:${SCOL[g.state]}"></span>`).join("")}</div></div>`).join("")}</div>
+      <table class="at" style="margin-top:10px"><tr><th>Vessel</th><th>Contractor</th><th>Type</th><th class="num">Hours on site</th><th class="num">Installs (est.)</th><th class="num">Cable km</th></tr>
+      ${s.vesselList.map(V=>`<tr><td>${esc(V.v.label)}</td><td>${esc(V.v.contractor)}</td><td>${esc(V.v.vtype)}</td><td class="num">${V.hours.toFixed(1)}</td><td class="num">${V.installs||"–"}</td><td class="num">${V.km?V.km.toFixed(1):"–"}</td></tr>`).join("")}</table>`;
+  }
+  $("sites").innerHTML=html;
+}
+
+/* ---- Discovery (untracked vessels seen inside wind farms) ---- */
+const AISTYPE=t=>{ t=+t; if(!t) return "Unknown"; if(t===30) return "Fishing"; if(t===31||t===32) return "Towing"; if(t===33) return "Dredging / UW ops";
+  if(t===50) return "Pilot"; if(t===51) return "SAR"; if(t===52) return "Tug"; if(t===55) return "Law enforcement"; if(t>=60&&t<70) return "Passenger";
+  if(t>=70&&t<80) return "Cargo"; if(t>=80&&t<90) return "Tanker"; if(t>=90&&t<100) return "Other (SOV/CTV/special)"; return "Type "+t; };
+function discList(){
+  const tracked=new Set(vessels.map(v=>String(v.mmsi))), hideCargo=$("dHide")?$("dHide").checked:true;
+  return Object.entries(disc.vessels||{}).map(([m,d])=>({mmsi:m,...d})).filter(d=>!tracked.has(d.mmsi))
+    .filter(d=>!hideCargo||!(+d.ship_type>=70&&+d.ship_type<90)).filter(d=>(d.slots||0)>=2)
+    .sort((a,b)=>(b.slots||0)-(a.slots||0));
+}
+function renderDiscLayer(){
+  discLayer.clearLayers();
+  for(const d of discList().slice(0,300)) if(d.lat!=null)
+    L.circleMarker([d.lat,d.lon],{radius:4,color:"#c9a0ff",weight:1,fillOpacity:.8}).bindTooltip(`${esc(d.name||d.mmsi)} · ${AISTYPE(d.ship_type)} · ${(d.sites||[]).slice(0,2).join(", ")}`).addTo(discLayer);
+}
+function renderDisc(){
+  const keep=$("dHide")?$("dHide").checked:true, L0=discList();
+  let html=`<h2>Discovery – vessels working in wind farms that are not in your list</h2>
+   <p>Collected from AIS over active wind farm areas. Hours = 15-min slots seen inside a wind farm polygon (last 30 days). Typical finds: SOVs, CTVs, feeder barges, guard and survey vessels.
+   To track one, add <code>{"mmsi": "…", "name": "…", "contractor": "…", "type": "…"}</code> to vessels.json. ${disc.updated_utc?"Updated "+local(disc.updated_utc)+".":""}</p>
+   <label style="font-size:12px"><input type="checkbox" id="dHide" ${keep?"checked":""}> Hide cargo ships and tankers</label>`;
+  html+=L0.length?`<table class="at" style="margin-top:8px"><tr><th>Name</th><th>MMSI</th><th>AIS type</th><th class="num">Hours seen</th><th>Wind farm(s)</th><th>First seen</th><th>Last seen</th><th>Destination</th></tr>
+   ${L0.slice(0,300).map(d=>`<tr data-d="${d.mmsi}"><td>${esc(d.name||"–")}</td><td>${d.mmsi}</td><td>${AISTYPE(d.ship_type)}</td><td class="num">${((d.slots||0)/4).toFixed(1)}</td><td>${esc((d.sites||[]).slice(0,3).join(", "))}</td><td>${local(d.first)}</td><td>${local(d.last)}</td><td>${esc(d.destination||"")}</td></tr>`).join("")}</table>`
+   :"<p>No discovered vessels yet – the list fills up as the collector runs.</p>";
+  $("disc").innerHTML=html;
+  $("dHide").onchange=()=>{ renderDisc(); renderDiscLayer(); };
 }
 
 function select(m,pan=true){
@@ -340,26 +312,27 @@ function select(m,pan=true){
   const v=info(vessels.find(x=>x.mmsi===selected)||{});
   if(selected&&v.lat!=null&&pan){ map.setView([v.lat,v.lon],Math.max(map.getZoom(),9)); markers[selected]?.openPopup(); }
 }
-function view(mode){
-  const m=mode===true?"fleet":mode===false?"map":mode;
-  $("tMap").classList.toggle("on",m==="map"); $("tFleet").classList.toggle("on",m==="fleet"); $("tVuo").classList.toggle("on",m==="vuo");
+function view(m){
+  mode=m;
+  [["tMap","map"],["tFleet","fleet"],["tVuo","vuo"],["tSites","sites"],["tDisc","disc"]].forEach(([b,k])=>$(b).classList.toggle("on",k===m));
   $("map").style.display=m==="map"?"":"none"; $("side").style.display=m==="map"?"":"none";
-  $("fleet").style.display=m==="fleet"?"block":"none"; $("vuo").style.display=m==="vuo"?"block":"none";
-  if(m==="vuo") renderVuo();
-  if(m==="map") setTimeout(()=>map.invalidateSize(),50);
+  ["fleet","vuo","sites","disc"].forEach(k=>$(k).style.display=k===m?"block":"none");
+  render(); if(m==="map") setTimeout(()=>map.invalidateSize(),50);
 }
 $("list").onclick=e=>{const r=e.target.closest("[data-m]"); if(r) select(r.dataset.m);};
-$("fleet").onclick=e=>{const r=e.target.closest("[data-f]"); if(r){ view(false); selected=null; select(r.dataset.f); }};
-$("tMap").onclick=()=>view("map"); $("tFleet").onclick=()=>view("fleet"); $("tVuo").onclick=()=>view("vuo");
+$("fleet").onclick=e=>{const r=e.target.closest("[data-f]"); if(r){ selected=null; view("map"); select(r.dataset.f); }};
 $("vuo").onclick=e=>{const r=e.target.closest("[data-u]"); if(r){ vuoSel=vuoSel===r.dataset.u?null:r.dataset.u; renderVuo(); }};
+$("sites").onclick=e=>{const r=e.target.closest("[data-s]"); if(r){ siteSel=siteSel===r.dataset.s?null:r.dataset.s; renderSites(); }};
+$("disc").onclick=e=>{const r=e.target.closest("[data-d]"); if(!r) return; const d=(disc.vessels||{})[r.dataset.d]; if(d&&d.lat!=null){ view("map"); if(!map.hasLayer(discLayer)) discLayer.addTo(map); map.setView([d.lat,d.lon],11); }};
+$("tMap").onclick=()=>view("map"); $("tFleet").onclick=()=>view("fleet"); $("tVuo").onclick=()=>view("vuo"); $("tSites").onclick=()=>view("sites"); $("tDisc").onclick=()=>view("disc");
 $("hours").onchange=render;
 $("ctr").onchange=()=>{ selected=null; firstFit=true; render(); };
 $("acsv").onclick=()=>{
-  const h=+$("hours").value, out=[["mmsi","vessel","contractor","type","job","activity","start_utc","end_utc","hours","lat","lon","avg_sog_kn","points","hs_avg_m","hs_max_m","wind_avg_ms","wind_max_ms"]];
+  const h=H(), out=[["mmsi","vessel","contractor","type","job","activity","start_utc","end_utc","hours","wind_farm","port","lat","lon","avg_sog_kn","points","hs_avg_m","hs_max_m","wind_avg_ms","wind_max_ms"]];
   for(const v0 of shown()){ const v=info(v0);
-    for(const s of activity(v.mmsi,h).segs) out.push([v.mmsi,v.label,v.contractor,v.vtype,v.job,s.state,new Date(s.start).toISOString(),new Date(s.end).toISOString(),
-      s.hours.toFixed(2),s.lat?.toFixed(5)??"",s.lon?.toFixed(5)??"",s.avg_sog?.toFixed(1)??"",s.pts.length,s.hs?.toFixed(2)??"",s.hs_max?.toFixed(2)??"",s.wind?.toFixed(1)??"",s.wind_max?.toFixed(1)??""]); }
-  const csv="﻿"+out.map(r=>r.map(c=>/[;"\n]/.test(String(c))?`"${String(c).replace(/"/g,'""')}"`:c).join(";")).join("\n");
+    for(const s of activity(v.mmsi,h,v.vtype).segs) out.push([v.mmsi,v.label,v.contractor,v.vtype,v.job,s.state,new Date(s.start).toISOString(),new Date(s.end).toISOString(),
+      s.hours.toFixed(2),s.wf||"",s.port||"",s.lat?.toFixed(5)??"",s.lon?.toFixed(5)??"",s.avg_sog?.toFixed(1)??"",s.pts.length,s.hs?.toFixed(2)??"",s.hs_max?.toFixed(2)??"",s.wind?.toFixed(1)??"",s.wind_max?.toFixed(1)??""]); }
+  const csv="\ufeff"+out.map(r=>r.map(c=>/[;"\n]/.test(String(c))?`"${String(c).replace(/"/g,'""')}"`:c).join(";")).join("\n");
   const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
   a.download=`vessel_activity_${new Date().toISOString().slice(0,10)}.csv`; a.click();
 };

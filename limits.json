@@ -1,0 +1,10 @@
+{
+  "WTIV":    {"hs": 2.5, "wind": 12},
+  "Jack-up": {"hs": 2.5, "wind": 12},
+  "CLV":     {"hs": 2.5, "wind": 18},
+  "Support": {"hs": 2.5, "wind": 18},
+  "HLV":     {"hs": 2.0, "wind": 15},
+  "SSCV":    {"hs": 2.0, "wind": 15},
+  "Crane":   {"hs": 2.0, "wind": 15},
+  "Pile":    {"hs": 2.0, "wind": 15}
+}

@@ -241,6 +241,157 @@ def update_windfarms():
         print("wind farms download failed:", e)
 
 
+# ---------------------------------------------------------------- discovery
+# A second AIS subscription over active wind farm areas finds vessels that work there but are not tracked.
+DISCOVERY = os.environ.get("DISCOVERY", "1") == "1"
+DISC_KEEP_DAYS = 30
+DISC = {"seen": {}, "static": {}}   # filled while listening, merged into data/discovery.json at every slot
+WF_POLYS = []                        # [(name, bbox, [rings...])]
+
+
+def _ring_has(x, y, r):
+    c = False
+    j = len(r) - 1
+    for i in range(len(r)):
+        xi, yi = r[i][0], r[i][1]
+        xj, yj = r[j][0], r[j][1]
+        if (yi > y) != (yj > y) and x < (xj - xi) * (y - yi) / (yj - yi) + xi:
+            c = not c
+        j = i
+    return c
+
+
+def load_wf_polys():
+    WF_POLYS.clear()
+    path = os.path.join(DATA, "windfarms.geojson")
+    if not os.path.exists(path):
+        return
+    with open(path, encoding="utf-8") as f:
+        gj = json.load(f)
+    for ft in gj.get("features", []):
+        p = ft.get("properties") or {}
+        st = str(p.get("status") or p.get("STATUS") or "").lower()
+        if st not in ("production", "construction", "test site"):
+            continue
+        g = ft.get("geometry") or {}
+        polys = [g["coordinates"]] if g.get("type") == "Polygon" else g.get("coordinates", []) if g.get("type") == "MultiPolygon" else []
+        if not polys:
+            continue
+        xs = [c[0] for pl in polys for c in pl[0]]
+        ys = [c[1] for pl in polys for c in pl[0]]
+        name = p.get("name") or p.get("NAME") or "Wind farm"
+        WF_POLYS.append((name, (min(xs), min(ys), max(xs), max(ys)), polys))
+
+
+def wf_at(lat, lon):
+    for name, b, polys in WF_POLYS:
+        if b[0] <= lon <= b[2] and b[1] <= lat <= b[3]:
+            for pl in polys:
+                if _ring_has(lon, lat, pl[0]) and not any(_ring_has(lon, lat, h) for h in pl[1:]):
+                    return name
+    return None
+
+
+def wf_boxes(max_boxes=80):
+    """1x1 degree cells that contain active wind farms (AISStream bounding boxes: [[lat,lon],[lat,lon]])."""
+    cells = set()
+    for _, b, _ in WF_POLYS:
+        for x in range(int(b[0] // 1), int(b[2] // 1) + 1):
+            for y in range(int(b[1] // 1), int(b[3] // 1) + 1):
+                cells.add((y, x))
+    cells = sorted(cells)[:max_boxes]
+    return [[[y, x], [y + 1, x + 1]] for y, x in cells]
+
+
+async def discover(tracked, deadline):
+    load_wf_polys()
+    boxes = wf_boxes()
+    if not boxes:
+        print("discovery: no wind farm polygons yet")
+        return
+    sub = {"APIKey": KEY, "BoundingBoxes": boxes,
+           "FilterMessageTypes": sorted(POS_TYPES | {"ShipStaticData", "StaticDataReport"})}
+    print(f"discovery: watching {len(boxes)} areas / {len(WF_POLYS)} wind farms")
+    while time.time() < deadline:
+        try:
+            async with websockets.connect(URL, open_timeout=30, ping_interval=20, ping_timeout=60, max_size=2 ** 22) as ws:
+                await ws.send(json.dumps(sub))
+                while time.time() < deadline:
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=max(0.5, deadline - time.time()))
+                    except asyncio.TimeoutError:
+                        continue
+                    msg = json.loads(raw)
+                    if isinstance(msg, dict) and msg.get("error"):
+                        print("discovery stopped (AISStream):", msg["error"])
+                        return
+                    _disc_msg(msg, tracked)
+        except (OSError, websockets.exceptions.WebSocketException, asyncio.TimeoutError) as e:
+            print("discovery connection dropped:", e)
+            await asyncio.sleep(15)
+
+
+def _disc_msg(msg, tracked):
+    mtype = msg.get("MessageType")
+    meta = msg.get("MetaData") or {}
+    mmsi = str(meta.get("MMSI", "")).strip()
+    if not mmsi or mmsi in tracked:
+        return
+    body = (msg.get("Message") or {}).get(mtype) or {}
+    st = DISC["static"].setdefault(mmsi, {}) if (mmsi in DISC["seen"] or len(DISC["static"]) < 20000) else {}
+    nm = (meta.get("ShipName") or "").strip()
+    if nm:
+        st["name"] = nm
+    if mtype == "ShipStaticData":
+        if body.get("Type"):
+            st["ship_type"] = body.get("Type")
+        if (body.get("Destination") or "").strip():
+            st["destination"] = body["Destination"].strip()
+    elif mtype == "StaticDataReport":
+        b = body.get("ReportB") or {}
+        if b.get("Valid") and b.get("ShipType"):
+            st["ship_type"] = b["ShipType"]
+    elif mtype in POS_TYPES:
+        lat = num(body.get("Latitude", meta.get("latitude")), maxv=91)
+        lon = num(body.get("Longitude", meta.get("longitude")), maxv=181)
+        if lat is None or lon is None:
+            return
+        site = wf_at(lat, lon)
+        if not site:
+            return
+        DISC["seen"][mmsi] = {"ts": iso(now()), "lat": round(lat, 4), "lon": round(lon, 4),
+                              "sog": num(body.get("Sog"), maxv=102.3), "site": site}
+
+
+def save_discovery():
+    if not DISC["seen"]:
+        return
+    path = os.path.join(DATA, "discovery.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception:
+        d = {"vessels": {}}
+    V = d.setdefault("vessels", {})
+    slot_id = int(time.time() // (SLOT_MIN * 60))
+    for m, s in DISC["seen"].items():
+        v = V.setdefault(m, {"first": s["ts"], "slots": 0, "sites": []})
+        if v.get("last_slot") != slot_id:
+            v["slots"] = v.get("slots", 0) + 1
+            v["last_slot"] = slot_id
+        v.update({"last": s["ts"], "lat": s["lat"], "lon": s["lon"], "sog": s["sog"]})
+        if s["site"] not in v["sites"]:
+            v["sites"] = (v["sites"] + [s["site"]])[-5:]
+        v.update({k: x for k, x in DISC["static"].get(m, {}).items() if x})
+    cutoff = iso(now() - __import__("datetime").timedelta(days=DISC_KEEP_DAYS))
+    d["vessels"] = {m: v for m, v in V.items() if v.get("last", "") >= cutoff}
+    d["updated_utc"] = iso(now())
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(d, f, ensure_ascii=False, separators=(",", ":"))
+    print(f"discovery: {len(DISC['seen'])} vessels in wind farms this slot, {len(d['vessels'])} in list")
+    DISC["seen"].clear()
+
+
 def save_slot(mmsis, pos, static):
     os.makedirs(DATA, exist_ok=True)
     update_windfarms()
@@ -287,6 +438,12 @@ def save_slot(mmsis, pos, static):
             latest["last_weather"] = {"utc": iso(now()), "points": len(wx)}
         print(f"weather: {len(wx)} points")
 
+    if DISCOVERY:
+        try:
+            save_discovery()
+        except Exception as e:
+            print("discovery save failed:", e)
+
     seen = sum(1 for m in mmsis if lv.get(m, {}).get("lat") is not None)
     latest["last_run"] = {"utc": iso(now()), "received": len(pos), "tracked": len(mmsis), "ever_seen": seen,
                           "missing": [m for m in mmsis if m not in pos]}
@@ -303,7 +460,17 @@ def main():
     with open(os.path.join(ROOT, "vessels.json"), encoding="utf-8") as f:
         vessels = json.load(f)
     mmsis = [str(v["mmsi"]) for v in vessels][:50]
-    asyncio.run(listen(mmsis, lambda p, s: save_slot(mmsis, p, s)))
+    os.makedirs(DATA, exist_ok=True)
+    update_windfarms()
+
+    async def run_all():
+        deadline = time.time() + RUN_MINUTES * 60
+        tasks = [listen(mmsis, lambda p, s: save_slot(mmsis, p, s))]
+        if DISCOVERY:
+            tasks.append(discover(set(mmsis), deadline))
+        await asyncio.gather(*tasks)
+
+    asyncio.run(run_all())
 
 
 if __name__ == "__main__":
