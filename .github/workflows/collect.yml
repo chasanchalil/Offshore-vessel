@@ -34,7 +34,7 @@ jobs:
       - name: Collect positions from AISStream
         env:
           AISSTREAM_API_KEY: ${{ secrets.AISSTREAM_API_KEY }}
-          LISTEN_SECONDS: "120"
+          LISTEN_SECONDS: "240"
         run: python collect.py
 
       - name: Save data to repository
