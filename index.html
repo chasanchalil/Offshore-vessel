@@ -67,7 +67,7 @@ table.at td.num,table.at th.num{text-align:right}
     <div id="list"></div>
     <div id="act"></div>
     <div class="foot"><span class="g">● &lt;45 min</span><span class="a">● &lt;3 h</span><span class="r">● older</span><span class="n">● no data</span>
-      <span class="sp"></span><span>AIS: AISStream.io · Weather: <a href="https://open-meteo.com" style="color:var(--mut)">Open-Meteo.com</a> · Wind farms: EMODnet (CC BY 4.0) · v2.6</span></div>
+      <span class="sp"></span><span>AIS: AISStream.io · Weather: <a href="https://open-meteo.com" style="color:var(--mut)">Open-Meteo.com</a> · Wind farms: EMODnet (CC BY 4.0) · v2.7</span></div>
   </aside>
   <div id="map"></div>
   <div id="fleet"></div>
@@ -75,8 +75,8 @@ table.at td.num,table.at th.num{text-align:right}
 </main>
 <script>
 const NAV=["Under way (engine)","At anchor","Not under command","Restricted manoeuvrability","Constrained by draught","Moored","Aground","Fishing","Under way (sailing)","","","Towing astern","Pushing ahead","","AIS-SART","Not defined"];
-const STATES=["Stationary / working","Slow / manoeuvring","Transit","Transit (est.)","At anchor","Moored","No data"];
-const SCOL={"Transit":"#2f9be0","Transit (est.)":"#7fc3f0","Slow / manoeuvring":"#9b7be0","Stationary / working":"#2fbf71","At anchor":"#e0a92f","Moored":"#8aa0b4","No data":"#3a4a5c"};
+const STATES=["Stationary / working","Working (est.)","Slow / manoeuvring","Transit","Transit (est.)","At anchor","Moored","No data"];
+const SCOL={"Transit":"#2f9be0","Transit (est.)":"#7fc3f0","Slow / manoeuvring":"#9b7be0","Stationary / working":"#2fbf71","Working (est.)":"#8fdcb0","At anchor":"#e0a92f","Moored":"#8aa0b4","No data":"#3a4a5c"};
 const INTERVAL=15, GAP=50; // minutes
 const $=id=>document.getElementById(id);
 let vessels=[], latest={}, positions={}, weather={}, selected=null, firstFit=true;
@@ -171,6 +171,19 @@ function classify(sog,nav){
   if(sog==null) return nav===0?"Transit":"Stationary / working";
   if(sog<1) return "Stationary / working"; if(sog<5) return "Slow / manoeuvring"; return "Transit";
 }
+// What happened during an AIS gap? Same spot before and after -> vessel stayed there.
+const WORK_FILL_MAX_H=48;
+function gapFill(p,q,st,km,kn,dt){
+  if(!q) return "No data";
+  const stQ=classify(q.sog,q.nav);
+  if(km<1&&dt<=WORK_FILL_MAX_H*3600e3){
+    const working=s=>s==="Stationary / working"||s==="Slow / manoeuvring";
+    if(working(st)&&working(stQ)&&(!wfIndex.length||windfarmAt(p.lat,p.lon))) return "Working (est.)";
+    if(st===stQ&&(st==="Moored"||st==="At anchor")) return st;
+  }
+  if(km>5&&kn>=3) return "Transit (est.)";
+  return "No data";
+}
 function activity(mmsi,hours){
   const end=Date.now(), start=end-hours*3600e3;
   const pts=(positions[mmsi]||[]).filter(p=>Date.parse(p.ts)>=start);
@@ -183,7 +196,7 @@ function activity(mmsi,hours){
     const st=classify(p.sog,p.nav);
     if(tn-t>GAP*60e3){ push(st,t,t+INTERVAL*60e3,p);
       const q=i+1<pts.length?pts[i+1]:null, km=q?hav(p,q):0, kn=q?(km/1.852)/((tn-t)/3600e3):0;
-      push(q&&km>5&&kn>=3?"Transit (est.)":"No data",t+INTERVAL*60e3,tn,null); }
+      push(gapFill(p,q,st,km,kn,tn-t),t+INTERVAL*60e3,tn,null); }
     else push(st,t,tn,p);
   });
   if(pts.length){ const lt=Date.parse(pts[pts.length-1].ts)+INTERVAL*60e3; if(lt<end) push("No data",lt,end,null); }
@@ -288,11 +301,11 @@ function renderVuo(){
   const pct=(a,k)=>{const x=k.reduce((s,kk)=>s+(a.totals[kk]||0),0); return x>0.05?(100*x/h).toFixed(0)+"%":"–";};
   let html=`<h2>VUO – Vessel utilisation overview (${per})</h2>
    <p>Estimated from 15-min AIS. <b>Installation vessels:</b> each stationary stop of 2–96 h at a separate spot (&gt;500 m apart)${wfIndex.length?" inside a wind farm":""} ≈ one installation position.
-   <b>CLVs:</b> slow continuous progress (0.05–1.5 kn) ≈ cable lay / trenching, length = distance sailed. Estimates – typical accuracy ±10–20%.</p>
+   <b>CLVs:</b> slow continuous progress (0.05–1.5 kn) ≈ cable lay / trenching, length = distance sailed. AIS gaps where the vessel is at the same spot before and after (&lt;1 km, ≤48 h) inside a wind farm count as <b>Working (est.)</b>. Estimates – typical accuracy ±10–20%.</p>
    <table class="at"><tr><th>Vessel</th><th>Contractor</th><th>Type</th><th class="num">Work</th><th class="num">Transit</th><th class="num">Port</th><th class="num">Anchor</th><th class="num">No data</th><th class="num">Port calls</th><th class="num">Installs (est.)</th><th class="num">h / install</th><th class="num">Cable km (est.)</th><th class="num">km / day lay</th><th>Wind farm(s)</th></tr>`;
   for(const {v,r} of rows){ const clv=isCLV(v), km=r.lay.reduce((s,l)=>s+l.km,0), layH=r.lay.reduce((s,l)=>s+l.h,0);
     html+=`<tr data-u="${v.mmsi}" ${vuoSel===v.mmsi?'style="background:#1c2a39"':""}><td>${esc(v.label)}</td><td>${esc(v.contractor)}</td><td>${esc(v.vtype)}</td>
-     <td class="num">${pct(r.a,["Stationary / working","Slow / manoeuvring"])}</td><td class="num">${pct(r.a,["Transit","Transit (est.)"])}</td>
+     <td class="num">${pct(r.a,["Stationary / working","Working (est.)","Slow / manoeuvring"])}</td><td class="num">${pct(r.a,["Transit","Transit (est.)"])}</td>
      <td class="num">${pct(r.a,["Moored"])}</td><td class="num">${pct(r.a,["At anchor"])}</td><td class="num">${pct(r.a,["No data"])}</td>
      <td class="num">${r.portCalls||"–"}</td>
      <td class="num">${clv?"–":(r.site.length||"–")}</td><td class="num">${!clv&&r.site.length?(r.site.reduce((s,x)=>s+x.h,0)/r.site.length).toFixed(1):"–"}</td>
@@ -309,7 +322,7 @@ function renderVuo(){
   }
   $("vuo").innerHTML=html;
 }
-function wAvg(a,k){ let h=0,x=0; for(const s of a.segs) if(s.state==="Stationary / working"&&s[k]!=null){ h+=s.hours; x+=s[k]*s.hours; } return h?fmt(x/h):"–"; }
+function wAvg(a,k){ let h=0,x=0; for(const s of a.segs) if((s.state==="Stationary / working"||s.state==="Working (est.)")&&s[k]!=null){ h+=s.hours; x+=s[k]*s.hours; } return h?fmt(x/h):"–"; }
 function renderFleet(){
   const h=+$("hours").value;
   const rows=shown().map(v=>({v:info(v),a:activity(v.mmsi,h)}));
@@ -318,7 +331,7 @@ function renderFleet(){
    <table class="at"><tr><th>Vessel</th><th>Contractor</th><th>Type</th><th>Job</th>${STATES.map(s=>`<th class="num"><span class="sw" style="background:${SCOL[s]}"></span>${s}</th>`).join("")}<th class="num">Working % of covered time</th><th class="num">Hs while working (avg m)</th><th class="num">Wind while working (avg m/s)</th></tr>
    ${rows.map(({v,a})=>{const cov=h-a.totals["No data"]; return `<tr data-f="${v.mmsi}"><td>${esc(v.label)}</td><td>${esc(v.contractor)}</td><td>${esc(v.vtype)}</td><td class="job">${esc(v.job)}</td>
      ${STATES.map(s=>`<td class="num">${a.totals[s]?a.totals[s].toFixed(1):"–"}</td>`).join("")}
-     <td class="num">${cov>0.5?(100*a.totals["Stationary / working"]/cov).toFixed(0)+"%":"–"}</td>
+     <td class="num">${cov>0.5?(100*(a.totals["Stationary / working"]+a.totals["Working (est.)"])/cov).toFixed(0)+"%":"–"}</td>
      <td class="num">${wAvg(a,"hs")}</td><td class="num">${wAvg(a,"wind")}</td></tr>`;}).join("")}</table>`;
 }
 
