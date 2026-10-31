@@ -148,6 +148,63 @@ def fetch_weather(points):
     return out
 
 
+WF_URL = ("https://ows.emodnet-humanactivities.eu/wfs?service=WFS&version=1.0.0&request=GetFeature"
+          "&typeName=emodnet:windfarmspoly&outputFormat=application/json&srsName=EPSG:4326")
+WF_MAX_AGE_DAYS = 7  # EMODnet Human Activities wind farm polygons (CC BY 4.0, CETMAR) – refreshed weekly
+
+
+def _round_coords(c):
+    if isinstance(c, (int, float)):
+        return round(c, 4)
+    return [_round_coords(x) for x in c]
+
+
+def _first_xy(c):
+    while isinstance(c, list) and c and isinstance(c[0], list):
+        c = c[0]
+    return c
+
+
+def _swap(c):
+    if c and isinstance(c[0], (int, float)):
+        return [c[1], c[0]] + c[2:]
+    return [_swap(x) for x in c]
+
+
+def update_windfarms():
+    path = os.path.join(DATA, "windfarms.geojson")
+    if os.path.exists(path) and time.time() - os.path.getmtime(path) < WF_MAX_AGE_DAYS * 86400 \
+            and not os.environ.get("FORCE_WINDFARMS"):
+        return
+    try:
+        req = urllib.request.Request(WF_URL, headers={"User-Agent": "vessel-tracker (personal)"})
+        with urllib.request.urlopen(req, timeout=120) as r:
+            gj = json.loads(r.read())
+        feats = []
+        for f in gj.get("features", []):
+            if not f.get("geometry"):
+                continue
+            g = f["geometry"]
+            g["coordinates"] = _round_coords(g["coordinates"])
+            props = {k: v for k, v in (f.get("properties") or {}).items() if v not in (None, "")}
+            feats.append({"type": "Feature", "geometry": g, "properties": props})
+        if not feats:
+            print("wind farms: empty response, keeping old file")
+            return
+        # make sure order is [lon, lat] (Europe: lon -30..45, lat 30..75)
+        xs = [_first_xy(f["geometry"]["coordinates"]) for f in feats[:50]]
+        if sum(1 for x in xs if x and x[0] > 30 and abs(x[1]) < 30) > len(xs) / 2:
+            for f in feats:
+                f["geometry"]["coordinates"] = _swap(f["geometry"]["coordinates"])
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"type": "FeatureCollection", "features": feats,
+                       "source": "EMODnet Human Activities, CC BY 4.0", "updated_utc": iso(now())},
+                      fh, ensure_ascii=False, separators=(",", ":"))
+        print(f"wind farms: {len(feats)} polygons saved")
+    except Exception as e:
+        print("wind farms download failed:", e)
+
+
 def main():
     if not KEY:
         print("Secret AISSTREAM_API_KEY is missing (Settings > Secrets and variables > Actions).")
@@ -158,6 +215,7 @@ def main():
     pos, static = asyncio.run(listen(mmsis))
 
     os.makedirs(DATA, exist_ok=True)
+    update_windfarms()
     month_file = os.path.join(DATA, f"positions_{now():%Y-%m}.csv")
     new = not os.path.exists(month_file)
     with open(month_file, "a", newline="", encoding="utf-8") as f:
