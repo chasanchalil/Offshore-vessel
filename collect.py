@@ -8,6 +8,7 @@ import asyncio
 import csv
 import urllib.request
 import urllib.parse
+import urllib.error
 import json
 import os
 import sys
@@ -392,8 +393,100 @@ def save_discovery():
     DISC["seen"].clear()
 
 
+# ---------------------------------------------------------------- BarentsWatch (Norway, NLOD licence)
+BW_ID = os.environ.get("BW_CLIENT_ID", "").strip()
+BW_SECRET = os.environ.get("BW_CLIENT_SECRET", "").strip()
+_BW = {"token": None, "exp": 0, "off": False}
+
+
+def bw_token():
+    if _BW["token"] and time.time() < _BW["exp"] - 60:
+        return _BW["token"]
+    body = urllib.parse.urlencode({"client_id": BW_ID, "client_secret": BW_SECRET, "scope": "ais",
+                                   "grant_type": "client_credentials"}).encode()
+    req = urllib.request.Request("https://id.barentswatch.no/connect/token", data=body,
+                                 headers={"Content-Type": "application/x-www-form-urlencoded"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        d = json.loads(r.read())
+    _BW["token"], _BW["exp"] = d["access_token"], time.time() + int(d.get("expires_in", 3600))
+    return _BW["token"]
+
+
+def bw_latest():
+    """Latest position of every vessel in Norwegian waters (a few thousand records)."""
+    if not (BW_ID and BW_SECRET) or _BW["off"]:
+        return []
+    try:
+        tok = bw_token()
+        for url in ("https://live.ais.barentswatch.no/v1/latest/combined?modelType=Full",
+                    "https://live.ais.barentswatch.no/v1/latest/combined"):
+            try:
+                req = urllib.request.Request(url, headers={"Authorization": f"Bearer {tok}", "Accept": "application/json"})
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    data = json.loads(r.read())
+                if isinstance(data, dict):
+                    data = data.get("features") or data.get("items") or []
+                return [x.get("properties", x) if isinstance(x, dict) else {} for x in data]
+            except urllib.error.HTTPError as e:
+                if e.code in (401, 403):
+                    raise
+                continue
+    except Exception as e:
+        print("BarentsWatch failed:", e)
+        if "401" in str(e) or "403" in str(e) or "400" in str(e):
+            _BW["off"] = True  # wrong credentials – stop asking during this run
+    return []
+
+
+def _bw_time(t):
+    try:
+        return datetime.fromisoformat(str(t).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def bw_merge(mmsis, pos, static):
+    """Add BarentsWatch positions that AISStream did not deliver in this slot; also feed discovery."""
+    recs = bw_latest()
+    if not recs:
+        return 0
+    want, added, fresh = set(mmsis), 0, now().timestamp() - (SLOT_MIN * 60 + 600)
+    for x in recs:
+        m = str(x.get("mmsi", "")).strip()
+        t = _bw_time(x.get("msgtime"))
+        lat, lon = num(x.get("latitude"), maxv=91), num(x.get("longitude"), maxv=181)
+        if not m or t is None or lat is None or lon is None or t.timestamp() < fresh:
+            continue
+        rec = {"ts_utc": iso(t.replace(microsecond=0)), "mmsi": m, "lat": lat, "lon": lon,
+               "sog": num(x.get("speedOverGround"), maxv=102.3), "cog": num(x.get("courseOverGround"), maxv=360),
+               "heading": num(x.get("trueHeading"), bad=511), "nav_status": x.get("navigationalStatus")}
+        if m in want:
+            if m not in pos or pos[m]["ts_utc"] < rec["ts_utc"]:
+                if m not in pos:
+                    added += 1
+                pos[m] = rec
+            st = {"ais_name": (x.get("name") or "").strip(), "imo": str(x.get("imoNumber") or ""),
+                  "callsign": (x.get("callSign") or "").strip(), "ship_type": x.get("shipType"),
+                  "destination": (x.get("destination") or "").strip()}
+            static.setdefault(m, {}).update({k: v for k, v in st.items() if v not in (None, "", "0")})
+        elif DISCOVERY and WF_POLYS:
+            site = wf_at(lat, lon)
+            if site:
+                DISC["seen"][m] = {"ts": rec["ts_utc"], "lat": round(lat, 4), "lon": round(lon, 4), "sog": rec["sog"], "site": site}
+                d = DISC["static"].setdefault(m, {})
+                if x.get("name"):
+                    d["name"] = x["name"].strip()
+                if x.get("shipType"):
+                    d["ship_type"] = x["shipType"]
+                if x.get("destination"):
+                    d["destination"] = x["destination"].strip()
+    print(f"BarentsWatch: {len(recs)} records, {added} tracked vessels added")
+    return added
+
+
 def save_slot(mmsis, pos, static):
     os.makedirs(DATA, exist_ok=True)
+    bw_added = bw_merge(mmsis, pos, static)
     update_windfarms()
     month_file = os.path.join(DATA, f"positions_{now():%Y-%m}.csv")
     new = not os.path.exists(month_file)
@@ -446,6 +539,7 @@ def save_slot(mmsis, pos, static):
 
     seen = sum(1 for m in mmsis if lv.get(m, {}).get("lat") is not None)
     latest["last_run"] = {"utc": iso(now()), "received": len(pos), "tracked": len(mmsis), "ever_seen": seen,
+                          "barentswatch_added": bw_added,
                           "missing": [m for m in mmsis if m not in pos]}
     with open(latest_path, "w", encoding="utf-8") as f:
         json.dump(latest, f, indent=1, ensure_ascii=False)
@@ -465,6 +559,7 @@ def main():
 
     async def run_all():
         deadline = time.time() + RUN_MINUTES * 60
+        load_wf_polys()
         tasks = [listen(mmsis, lambda p, s: save_slot(mmsis, p, s))]
         if DISCOVERY:
             tasks.append(discover(set(mmsis), deadline))

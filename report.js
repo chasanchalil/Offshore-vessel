@@ -118,7 +118,7 @@ if (discTop.length) {
 }
 
 if (neverSeen.length) html += note(`<b>No AIS data this week:</b> ${esc(neverSeen.map(x => x.v.label).join(", "))}.`);
-html += `<p style="font-size:11px;color:#8c959f;margin-top:20px">Estimates from free terrestrial AIS (AISStream.io), Open-Meteo weather and EMODnet wind farm data (CC BY 4.0). Typical accuracy ±10–20%. Personal, non-commercial use.</p></div>`;
+html += `<p style="font-size:11px;color:#8c959f;margin-top:20px">Estimates from free terrestrial AIS (AISStream.io; Norwegian waters: BarentsWatch / Norwegian Coastal Administration, NLOD), Open-Meteo weather and EMODnet wind farm data (CC BY 4.0). Typical accuracy ±10–20%. Personal, non-commercial use.</p></div>`;
 
 // ---------- activity CSV attachment ----------
 const csv = [["mmsi", "vessel", "contractor", "type", "activity", "start_utc", "end_utc", "hours", "wind_farm", "port", "hs_avg_m", "wind_avg_ms"].join(";")];
