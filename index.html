@@ -67,7 +67,7 @@ table.at td.num,table.at th.num{text-align:right}
     <div id="list"></div>
     <div id="act"></div>
     <div class="foot"><span class="g">● &lt;45 min</span><span class="a">● &lt;3 h</span><span class="r">● older</span><span class="n">● no data</span>
-      <span class="sp"></span><span>AIS: AISStream.io · Weather: <a href="https://open-meteo.com" style="color:var(--mut)">Open-Meteo.com</a> · Wind farms: EMODnet (CC BY 4.0) · v2.5</span></div>
+      <span class="sp"></span><span>AIS: AISStream.io · Weather: <a href="https://open-meteo.com" style="color:var(--mut)">Open-Meteo.com</a> · Wind farms: EMODnet (CC BY 4.0) · v2.6</span></div>
   </aside>
   <div id="map"></div>
   <div id="fleet"></div>
@@ -125,7 +125,12 @@ function parseCSV(txt){
   const lines=txt.trim().split(/\r?\n/); const h=lines.shift().split(",");
   return lines.map(l=>{const c=l.split(","),o={}; h.forEach((k,i)=>o[k]=c[i]===""?null:c[i]); return o;});
 }
-async function getText(url){ const r=await fetch(url+"?t="+Date.now()); if(!r.ok) throw new Error(r.status); return r.text(); }
+// Data is read straight from the repository (updated every 15 min); falls back to the published copy
+const RAW=(()=>{ const h=location.hostname, seg=location.pathname.split("/").filter(Boolean)[0];
+  return h.endsWith(".github.io")&&seg?`https://raw.githubusercontent.com/${h.split(".")[0]}/${seg}/main/`:""; })();
+async function getText(url){
+  if(RAW&&url.startsWith("data/")){ try{ const r=await fetch(RAW+url+"?t="+Date.now()); if(r.ok) return r.text(); }catch(e){} }
+  const r=await fetch(url+"?t="+Date.now()); if(!r.ok) throw new Error(r.status); return r.text(); }
 
 async function load(){
   vessels=JSON.parse(await getText("vessels.json"));
@@ -155,7 +160,7 @@ async function load(){
   for(const k in weather) weather[k].sort((a,b)=>a.ts<b.ts?-1:1);
   if(!wfIndex.length){ try{ const gj=JSON.parse(await getText("data/windfarms.geojson")); wfLayer.clearLayers(); wfLayer.addData(gj); buildWfIndex(gj); }catch(e){} }
   const lr=latest.last_run;
-  $("upd").textContent = lr ? `Updated ${local(lr.utc)} · ${lr.received}/${lr.tracked} vessels reported` : "No data yet – run the workflow once";
+  $("upd").textContent = lr ? `Updated ${local(lr.utc)} · ${lr.received}/${lr.tracked} this slot · ${lr.ever_seen??"?"}/${lr.tracked} seen` : "No data yet – run the workflow once";
   render();
 }
 

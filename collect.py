@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Vessel Tracker – cloud collector (runs in GitHub Actions every 15 min).
-Listens to AISStream.io for LISTEN_SECONDS, then appends one position per vessel
+Vessel Tracker – cloud collector (runs in GitHub Actions; each run listens ~55 min and saves every 15 min).
+Listens to AISStream.io continuously for RUN_MINUTES and every 15 min appends one position per vessel
 to data/positions_YYYY-MM.csv and refreshes data/latest.json.
 """
 import asyncio
@@ -20,7 +20,8 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(ROOT, "data")
 URL = "wss://stream.aisstream.io/v0/stream"
 KEY = os.environ.get("AISSTREAM_API_KEY", "").strip()
-LISTEN = int(os.environ.get("LISTEN_SECONDS", "180"))
+RUN_MINUTES = float(os.environ.get("RUN_MINUTES", "55"))  # one run listens continuously this long
+SLOT_MIN = float(os.environ.get("SLOT_MIN", "15"))  # one saved position per vessel per 15-min slot
 POS_TYPES = {"PositionReport", "StandardClassBPositionReport", "ExtendedClassBPositionReport"}
 FIELDS = ["ts_utc", "mmsi", "lat", "lon", "sog", "cog", "heading", "nav_status"]
 WX_FIELDS = ["ts_utc", "mmsi", "lat", "lon", "wind_ms", "gust_ms", "wind_dir", "hs_m", "tp_s", "wave_dir", "swell_m"]
@@ -78,32 +79,67 @@ def parse(msg, pos, static):
         static[mmsi] = {k: v for k, v in s.items() if v not in (None, "", "0")}
 
 
-async def listen(mmsis):
-    pos, static = {}, {}
+def git_save(msg):
+    """Commit and push data/ (only inside GitHub Actions)."""
+    if not os.environ.get("GITHUB_ACTIONS"):
+        return
+    import subprocess
+    run = lambda *a: subprocess.run(list(a), cwd=ROOT, capture_output=True, text=True, timeout=120)
+    run("git", "add", "data")
+    if run("git", "diff", "--cached", "--quiet").returncode == 0:
+        return
+    run("git", "commit", "-m", msg)
+    for _ in range(3):
+        run("git", "pull", "--rebase", "-X", "theirs")
+        r = run("git", "push")
+        if r.returncode == 0:
+            print("pushed:", msg)
+            return
+        time.sleep(5)
+    print("push failed:", r.stderr[-300:])
+
+
+async def listen(mmsis, on_slot):
+    """Listen continuously for RUN_MINUTES; call on_slot(pos, static) every SLOT_MIN (aligned to :00/:15/:30/:45)."""
     sub = {"APIKey": KEY, "BoundingBoxes": [[[-90, -180], [90, 180]]], "FiltersShipMMSI": mmsis,
            "FilterMessageTypes": sorted(POS_TYPES | {"ShipStaticData"})}
-    start = time.time()
-    for attempt in range(3):
+    deadline = time.time() + RUN_MINUTES * 60
+    slot = SLOT_MIN * 60
+    slot_end = (int(time.time()) // slot + 1) * slot
+    pos, static = {}, {}
+
+    def flush():
+        nonlocal pos, static, slot_end
+        on_slot(pos, static)
+        pos, static = {}, {}
+        slot_end += slot
+
+    while time.time() < deadline:
         try:
-            async with websockets.connect(URL, open_timeout=30, ping_interval=20, max_size=2 ** 22) as ws:
+            async with websockets.connect(URL, open_timeout=30, ping_interval=20, ping_timeout=60,
+                                          max_size=2 ** 22) as ws:
                 await ws.send(json.dumps(sub))
-                while time.time() - start < LISTEN:
+                print("connected")
+                while time.time() < deadline:
+                    wait = min(slot_end, deadline) - time.time()
+                    if time.time() >= slot_end:
+                        flush()
+                        continue
                     try:
-                        raw = await asyncio.wait_for(ws.recv(), timeout=max(1, LISTEN - (time.time() - start)))
+                        raw = await asyncio.wait_for(ws.recv(), timeout=max(0.5, wait))
                     except asyncio.TimeoutError:
-                        break
+                        continue
                     msg = json.loads(raw)
                     if isinstance(msg, dict) and msg.get("error"):
                         print("AISStream error:", msg["error"])
                         sys.exit(1)
                     parse(msg, pos, static)
-                    if len(pos) == len(mmsis) and time.time() - start > 60:
-                        break  # every vessel reported
-                return pos, static
         except (OSError, websockets.exceptions.WebSocketException, asyncio.TimeoutError) as e:
-            print(f"connection attempt {attempt + 1} failed: {e}")
+            print("connection dropped:", e)
             await asyncio.sleep(10)
-    return pos, static
+            if time.time() >= slot_end and time.time() < deadline:
+                flush()
+    on_slot(pos, static)  # final (partial) slot
 
 
 def _get_json(base, params):
@@ -205,15 +241,7 @@ def update_windfarms():
         print("wind farms download failed:", e)
 
 
-def main():
-    if not KEY:
-        print("Secret AISSTREAM_API_KEY is missing (Settings > Secrets and variables > Actions).")
-        sys.exit(1)
-    with open(os.path.join(ROOT, "vessels.json"), encoding="utf-8") as f:
-        vessels = json.load(f)
-    mmsis = [str(v["mmsi"]) for v in vessels][:50]
-    pos, static = asyncio.run(listen(mmsis))
-
+def save_slot(mmsis, pos, static):
     os.makedirs(DATA, exist_ok=True)
     update_windfarms()
     month_file = os.path.join(DATA, f"positions_{now():%Y-%m}.csv")
@@ -238,7 +266,8 @@ def main():
         v.update(static.get(m, {}))
         if m in pos:
             v.update({k: pos[m][k] for k in FIELDS if k != "mmsi"})
-    # ---- weather, once per hour, at each vessel's latest known position
+
+    # weather, once per hour, at each vessel's latest known position
     last_wx = (latest.get("last_weather") or {}).get("utc")
     due = not last_wx or (now() - datetime.fromisoformat(last_wx.replace("Z", "+00:00"))).total_seconds() >= WX_EVERY_MIN * 60
     if due or os.environ.get("FORCE_WEATHER"):
@@ -258,11 +287,23 @@ def main():
             latest["last_weather"] = {"utc": iso(now()), "points": len(wx)}
         print(f"weather: {len(wx)} points")
 
-    latest["last_run"] = {"utc": iso(now()), "received": len(pos), "tracked": len(mmsis),
+    seen = sum(1 for m in mmsis if lv.get(m, {}).get("lat") is not None)
+    latest["last_run"] = {"utc": iso(now()), "received": len(pos), "tracked": len(mmsis), "ever_seen": seen,
                           "missing": [m for m in mmsis if m not in pos]}
     with open(latest_path, "w", encoding="utf-8") as f:
         json.dump(latest, f, indent=1, ensure_ascii=False)
-    print(f"{len(pos)}/{len(mmsis)} vessels reported. Missing: {latest['last_run']['missing']}")
+    print(f"[{now():%H:%M}Z] {len(pos)}/{len(mmsis)} vessels this slot, {seen}/{len(mmsis)} seen so far")
+    git_save(f"AIS update {now():%Y-%m-%dT%H:%MZ}")
+
+
+def main():
+    if not KEY:
+        print("Secret AISSTREAM_API_KEY is missing (Settings > Secrets and variables > Actions).")
+        sys.exit(1)
+    with open(os.path.join(ROOT, "vessels.json"), encoding="utf-8") as f:
+        vessels = json.load(f)
+    mmsis = [str(v["mmsi"]) for v in vessels][:50]
+    asyncio.run(listen(mmsis, lambda p, s: save_slot(mmsis, p, s)))
 
 
 if __name__ == "__main__":
