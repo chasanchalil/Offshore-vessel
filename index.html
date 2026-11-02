@@ -70,14 +70,14 @@ tr[data-u],tr[data-s],tr[data-d]{cursor:pointer}tr[data-u]:hover td,tr[data-s]:h
     <option value="24">Last 24 h</option><option value="72">Last 3 d</option>
     <option value="168" selected>Last 7 d</option><option value="720">Last 30 d</option>
   </select>
-  <button id="acsv">Activity CSV</button>
+  <button id="acsv">Activity CSV</button><button id="jcsv">Jobs CSV</button>
 </header>
 <main>
   <aside id="side">
     <div id="list"></div>
     <div id="act"></div>
     <div class="foot"><span class="g">● &lt;45 min</span><span class="a">● &lt;3 h</span><span class="r">● older</span><span class="n">● no data</span>
-      <span class="sp"></span><span>AIS: AISStream.io + BarentsWatch (NLOD) · Weather: <a href="https://open-meteo.com" style="color:var(--mut)">Open-Meteo.com</a> · Wind farms: EMODnet (CC BY 4.0) · v3.1</span></div>
+      <span class="sp"></span><span>AIS: AISStream.io + BarentsWatch (NLOD) · Weather: <a href="https://open-meteo.com" style="color:var(--mut)">Open-Meteo.com</a> · Wind farms: EMODnet (CC BY 4.0) · v3.3</span></div>
   </aside>
   <div id="map"></div>
   <div id="fleet" class="pane"></div>
@@ -123,13 +123,17 @@ async function load(){
   $("ctr").innerHTML='<option value="">All contractors</option>'+cs.map(c=>`<option ${c===cur?"selected":""}>${esc(c)}</option>`).join("");
   try{ latest=JSON.parse(await getText("data/latest.json")); }catch(e){ latest={vessels:{}}; }
   try{ LIMIT_OVERRIDE=JSON.parse(await getText("limits.json")); }catch(e){ LIMIT_OVERRIDE={}; }
-  try{ disc=JSON.parse(await getText("data/discovery.json")); }catch(e){ disc={vessels:{}}; }
+  let d1={vessels:{}}, d2={vessels:{}};
+  try{ d1=JSON.parse(await getText("data/discovery.json")); }catch(e){}
+  try{ d2=JSON.parse(await getText("data/dma_discovery.json")); }catch(e){}
+  disc=mergeDiscovery(d1,d2);
   const now=new Date(), months=[];
   for(let i=1;i>=0;i--){ const d=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth()-i,1)); months.push(d.toISOString().slice(0,7)); }
   resetData();
   for(const m of months){
     try{ loadPositions(parseCSV(await getText(`data/positions_${m}.csv`))); }catch(e){}
     try{ loadWeather(parseCSV(await getText(`data/weather_${m}.csv`))); }catch(e){}
+    try{ loadPositions(parseCSV(await getText(`data/dma_positions_${m}.csv`))); }catch(e){}
   }
   sortAll();
   if(!wfIndex.length){ try{ const gj=JSON.parse(await getText("data/windfarms.geojson")); wfLayer.clearLayers(); wfLayer.addData(gj); buildWfIndex(gj); }catch(e){} }
@@ -203,6 +207,8 @@ function renderAct(){
    <div class="bar">${a.segs.map(s=>`<span title="${s.state} ${s.hours.toFixed(1)} h" style="width:${100*s.hours/h}%;background:${SCOL[s.state]}"></span>`).join("")}</div>
    <table class="at"><tr><th>Activity</th><th class="num">Hours</th><th class="num">%</th></tr>
    ${STATES.filter(s=>a.totals[s]>0.01).map(s=>`<tr><td><span class="sw" style="background:${SCOL[s]}"></span>${s}</td><td class="num">${a.totals[s].toFixed(1)}</td><td class="num">${(100*a.totals[s]/h).toFixed(0)}%</td></tr>`).join("")}</table>
+   ${(()=>{ const J=jobLog(selected,h,v.vtype); if(!J.visits.length) return "";
+     return `<table class="at" style="margin-top:8px"><tr><th>Wind farm visit</th><th>Arrived</th><th class="num">h</th><th class="num">${J.clv?"km":"Positions"}</th><th class="num">Weather h</th></tr>${J.visits.slice().reverse().map(x=>`<tr><td>${esc(x.wf)}</td><td>${local(x.start)}</td><td class="num">${x.h.toFixed(1)}</td><td class="num">${J.clv?x.km.toFixed(1):x.jobs}</td><td class="num">${x.wowH.toFixed(1)}</td></tr>`).join("")}</table><p style="font-size:11px;color:var(--mut);margin:2px 0 6px">Full job log: VUO tab → click the vessel.</p>`; })()}
    <p style="font-size:11px;color:var(--mut);margin:4px 0">Weather limit for ${esc(v.vtype||"this vessel")}: Hs ${a.limits.hs} m · wind ${a.limits.wind} m/s</p>
    <table class="at" style="margin-top:8px"><tr><th>Start</th><th>Activity</th><th class="num">h</th><th>Where</th><th class="num">Hs avg/max m</th><th class="num">Wind avg m/s</th></tr>
    ${a.segs.slice().reverse().map(s=>`<tr><td>${local(s.start)}</td><td><span class="sw" style="background:${SCOL[s.state]}"></span>${s.state}</td><td class="num">${s.hours.toFixed(1)}</td><td>${esc(s.wf||s.port||(s.lat!=null?fmt(s.lat,2)+", "+fmt(s.lon,2):"–"))}</td><td class="num">${fmt(s.hs)} / ${fmt(s.hs_max)}</td><td class="num">${fmt(s.wind)}</td></tr>`).join("")}</table>`;
@@ -245,14 +251,42 @@ function renderVuo(){
      <td>${r.wfs.slice(0,2).map(esc).join(", ")||"–"}</td></tr>`; }
   html+="</table>";
   const sel=rows.find(x=>x.v.mmsi===vuoSel);
-  if(sel){ const {v,r}=sel, clv=isCLV(v.vtype), list=clv?r.lay:r.site;
-    html+=`<h3 style="margin-top:18px">${esc(v.label)} – ${clv?"lay / trench segments":"installation positions"} (${per()})</h3>`;
-    html+=list.length?`<table class="at"><tr><th>#</th><th>Start</th><th class="num">Hours</th>${clv?'<th class="num">km</th>':""}<th>Wind farm</th><th class="num">Hs avg m</th><th>Position</th></tr>
-      ${list.map((s,i)=>`<tr><td>${i+1}</td><td>${local(s.start)}</td><td class="num">${s.h.toFixed(1)}</td>${clv?`<td class="num">${s.km.toFixed(2)}</td>`:""}<td>${esc(s.wf||"–")}</td><td class="num">${fmt(s.hs)}</td><td>${fmt(s.lat,4)}, ${fmt(s.lon,4)}</td></tr>`).join("")}</table>`
-      :`<p>No ${clv?"lay segments":"installation stops"} detected in this period yet.</p>`;
+  if(sel){ const {v,r}=sel;
+    html+=jobLogHtml(v);
     html+=`<h3 style="margin-top:18px">Port calls</h3>`+(r.calls.length?`<table class="at"><tr><th>Port</th><th>Arrived</th><th class="num">Hours</th></tr>${r.calls.map(c=>`<tr><td>${esc(c.port)}</td><td>${local(c.start)}</td><td class="num">${c.h.toFixed(1)}</td></tr>`).join("")}</table>`:"<p>None in this period.</p>");
   }
   $("vuo").innerHTML=html;
+}
+
+/* ---- Job log (visits -> positions / lay segments -> pauses) ---- */
+const PCOL={"Weather":"#e0563f","Port":"#8aa0b4","Anchor":"#e0a92f","Transit":"#2f9be0","No AIS":"#3a4a5c"};
+function jobLogHtml(v){
+  const J=jobLog(v.mmsi,H(),v.vtype), clv=J.clv;
+  let html=`<h3 id="jl" style="margin-top:18px">${esc(v.label)} – job log (${per()})</h3>
+   <p>Each block is one visit to a wind farm (same site, gaps &lt; 24 h). ${clv?"Lay / trench = continuous slow progress; stationary on site = pull-in, jointing or hold.":"Position = one stationary job of 2–96 h, &gt;500 m from the previous one (≈ one foundation / turbine)."} Pauses show their likely reason from AIS state and weather limits.</p>`;
+  if(!J.visits.length) return html+"<p>No jobs detected in this period yet.</p>";
+  html+=`<table class="at"><tr><th>Wind farm</th><th>Arrived</th><th>Left</th><th class="num">On site h</th><th class="num">${clv?"Runs":"Positions"}</th><th class="num">Work h</th>${clv?'<th class="num">km</th><th class="num">km/day</th>':'<th class="num">h / position</th>'}${clv?"":'<th class="num">net h / position</th>'}<th class="num">Pauses h</th><th class="num">Weather h</th><th>From → to</th></tr>
+   ${J.visits.map((x,i)=>`<tr data-vis="${i}" style="cursor:pointer"><td><b>${esc(x.wf)}</b></td><td>${local(x.start)}</td><td>${x.ongoing?"<i>ongoing</i>":local(x.end)}</td><td class="num">${x.h.toFixed(1)}</td><td class="num">${x.jobs}</td><td class="num">${x.workH.toFixed(1)}</td>
+     ${clv?`<td class="num">${x.km.toFixed(1)}</td><td class="num">${x.workH?(x.km/x.workH*24).toFixed(1):"–"}</td>`:`<td class="num">${fmt(x.avgJobH)}</td>`}
+     ${clv?"":`<td class="num">${fmt(x.netJobH)}</td>`}<td class="num">${x.pauseH.toFixed(1)}</td><td class="num">${x.wowH.toFixed(1)}</td><td>${esc(x.arrivedFrom||"–")} → ${x.ongoing?"…":esc(x.leftTo||"–")}</td></tr>`).join("")}</table>`;
+  J.visits.forEach((x,i)=>{ let n=0;
+    html+=`<details ${i===J.visits.length-1?"open":""} style="margin:8px 0"><summary style="cursor:pointer"><b>${esc(x.wf)}</b> · ${local(x.start)} → ${x.ongoing?"ongoing":local(x.end)} · ${x.jobs} ${clv?"runs":"positions"}</summary>
+     <table class="at" style="margin-top:6px"><tr><th>#</th><th>Activity</th><th>Start</th><th>End</th><th class="num">Hours</th>${clv?'<th class="num">km</th>':""}<th>Reason / note</th><th class="num">of which weather h</th><th class="num">Hs avg m</th><th>Position</th></tr>
+     ${x.items.map(it=>{ const p=it.kind==="Pause"; if(!p) n++;
+       return `<tr ${p?'style="color:var(--mut)"':""}><td>${p?"":n}</td><td>${p?`<span class="sw" style="background:${PCOL[it.reason]||"#9b7be0"}"></span>Pause`:`<span class="sw" style="background:#2fbf71"></span>${it.kind}`}</td>
+         <td>${local(it.start)}</td><td>${local(it.end)}</td><td class="num">${it.h.toFixed(1)}</td>${clv?`<td class="num">${p?"":fmt(it.km,2)}</td>`:""}
+         <td>${p?esc(it.reason):""}</td><td class="num">${p||!it.wowH?"":it.wowH.toFixed(1)}</td><td class="num">${p?"":fmt(it.hs)}</td><td>${p?"":fmt(it.lat,4)+", "+fmt(it.lon,4)}</td></tr>`;}).join("")}</table></details>`; });
+  return html;
+}
+function jobsCsv(){
+  const out=[["mmsi","vessel","contractor","type","wind_farm","visit_no","item_no","activity","start_utc","end_utc","hours","km","pause_reason","weather_h_inside","hs_avg_m","lat","lon"]];
+  for(const v0 of shown()){ const v=info(v0), J=jobLog(v.mmsi,H(),v.vtype);
+    J.visits.forEach((x,i)=>{ let n=0; x.items.forEach(it=>{ const p=it.kind==="Pause"; if(!p) n++;
+      out.push([v.mmsi,v.label,v.contractor,v.vtype,x.wf,i+1,p?"":n,p?"Pause":it.kind,new Date(it.start).toISOString(),new Date(it.end).toISOString(),it.h.toFixed(2),
+        it.km!=null&&!p?it.km.toFixed(2):"",p?it.reason:"",!p&&it.wowH?it.wowH.toFixed(2):"",it.hs!=null?it.hs.toFixed(2):"",it.lat!=null?it.lat.toFixed(5):"",it.lon!=null?it.lon.toFixed(5):""]); }); }); }
+  const csv="\ufeff"+out.map(r=>r.map(c=>/[;"\n]/.test(String(c))?`"${String(c).replace(/"/g,'""')}"`:c).join(";")).join("\n");
+  const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
+  a.download=`vessel_jobs_${new Date().toISOString().slice(0,10)}.csv`; a.click();
 }
 
 /* ---- Sites (wind farm view + Gantt) ---- */
@@ -280,19 +314,19 @@ function renderSites(){
 }
 
 /* ---- Discovery (untracked vessels seen inside wind farms) ---- */
-const AISTYPE=t=>{ t=+t; if(!t) return "Unknown"; if(t===30) return "Fishing"; if(t===31||t===32) return "Towing"; if(t===33) return "Dredging / UW ops";
+const AISTYPE=(t,txt)=>{ t=+t; if(!t) return txt||"Unknown"; if(t===30) return "Fishing"; if(t===31||t===32) return "Towing"; if(t===33) return "Dredging / UW ops";
   if(t===50) return "Pilot"; if(t===51) return "SAR"; if(t===52) return "Tug"; if(t===55) return "Law enforcement"; if(t>=60&&t<70) return "Passenger";
   if(t>=70&&t<80) return "Cargo"; if(t>=80&&t<90) return "Tanker"; if(t>=90&&t<100) return "Other (SOV/CTV/special)"; return "Type "+t; };
 function discList(){
   const tracked=new Set(vessels.map(v=>String(v.mmsi))), hideCargo=$("dHide")?$("dHide").checked:true;
   return Object.entries(disc.vessels||{}).map(([m,d])=>({mmsi:m,...d})).filter(d=>!tracked.has(d.mmsi))
-    .filter(d=>!hideCargo||!(+d.ship_type>=70&&+d.ship_type<90)).filter(d=>(d.slots||0)>=2)
+    .filter(d=>!hideCargo||!((+d.ship_type>=70&&+d.ship_type<90)||/cargo|tanker/i.test(d.ship_type_txt||""))).filter(d=>(d.slots||0)>=2)
     .sort((a,b)=>(b.slots||0)-(a.slots||0));
 }
 function renderDiscLayer(){
   discLayer.clearLayers();
   for(const d of discList().slice(0,300)) if(d.lat!=null)
-    L.circleMarker([d.lat,d.lon],{radius:4,color:"#c9a0ff",weight:1,fillOpacity:.8}).bindTooltip(`${esc(d.name||d.mmsi)} · ${AISTYPE(d.ship_type)} · ${(d.sites||[]).slice(0,2).join(", ")}`).addTo(discLayer);
+    L.circleMarker([d.lat,d.lon],{radius:4,color:"#c9a0ff",weight:1,fillOpacity:.8}).bindTooltip(`${esc(d.name||d.mmsi)} · ${AISTYPE(d.ship_type,d.ship_type_txt)} · ${(d.sites||[]).slice(0,2).join(", ")}`).addTo(discLayer);
 }
 function renderDisc(){
   const keep=$("dHide")?$("dHide").checked:true, L0=discList();
@@ -301,7 +335,7 @@ function renderDisc(){
    To track one, add <code>{"mmsi": "…", "name": "…", "contractor": "…", "type": "…"}</code> to vessels.json. ${disc.updated_utc?"Updated "+local(disc.updated_utc)+".":""}</p>
    <label style="font-size:12px"><input type="checkbox" id="dHide" ${keep?"checked":""}> Hide cargo ships and tankers</label>`;
   html+=L0.length?`<table class="at" style="margin-top:8px"><tr><th>Name</th><th>MMSI</th><th>AIS type</th><th class="num">Hours seen</th><th>Wind farm(s)</th><th>First seen</th><th>Last seen</th><th>Destination</th></tr>
-   ${L0.slice(0,300).map(d=>`<tr data-d="${d.mmsi}"><td>${esc(d.name||"–")}</td><td>${d.mmsi}</td><td>${AISTYPE(d.ship_type)}</td><td class="num">${((d.slots||0)/4).toFixed(1)}</td><td>${esc((d.sites||[]).slice(0,3).join(", "))}</td><td>${local(d.first)}</td><td>${local(d.last)}</td><td>${esc(d.destination||"")}</td></tr>`).join("")}</table>`
+   ${L0.slice(0,300).map(d=>`<tr data-d="${d.mmsi}"><td>${esc(d.name||"–")}</td><td>${d.mmsi}</td><td>${AISTYPE(d.ship_type,d.ship_type_txt)}</td><td class="num">${((d.slots||0)/4).toFixed(1)}</td><td>${esc((d.sites||[]).slice(0,3).join(", "))}</td><td>${local(d.first)}</td><td>${local(d.last)}</td><td>${esc(d.destination||"")}</td></tr>`).join("")}</table>`
    :"<p>No discovered vessels yet – the list fills up as the collector runs.</p>";
   $("disc").innerHTML=html;
   $("dHide").onchange=()=>{ renderDisc(); renderDiscLayer(); };
@@ -321,12 +355,13 @@ function view(m){
 }
 $("list").onclick=e=>{const r=e.target.closest("[data-m]"); if(r) select(r.dataset.m);};
 $("fleet").onclick=e=>{const r=e.target.closest("[data-f]"); if(r){ selected=null; view("map"); select(r.dataset.f); }};
-$("vuo").onclick=e=>{const r=e.target.closest("[data-u]"); if(r){ vuoSel=vuoSel===r.dataset.u?null:r.dataset.u; renderVuo(); }};
+$("vuo").onclick=e=>{const r=e.target.closest("[data-u]"); if(r){ vuoSel=vuoSel===r.dataset.u?null:r.dataset.u; renderVuo(); if(vuoSel&&$("jl")) $("jl").scrollIntoView({behavior:"smooth"}); }};
 $("sites").onclick=e=>{const r=e.target.closest("[data-s]"); if(r){ siteSel=siteSel===r.dataset.s?null:r.dataset.s; renderSites(); }};
 $("disc").onclick=e=>{const r=e.target.closest("[data-d]"); if(!r) return; const d=(disc.vessels||{})[r.dataset.d]; if(d&&d.lat!=null){ view("map"); if(!map.hasLayer(discLayer)) discLayer.addTo(map); map.setView([d.lat,d.lon],11); }};
 $("tMap").onclick=()=>view("map"); $("tFleet").onclick=()=>view("fleet"); $("tVuo").onclick=()=>view("vuo"); $("tSites").onclick=()=>view("sites"); $("tDisc").onclick=()=>view("disc");
 $("hours").onchange=render;
 $("ctr").onchange=()=>{ selected=null; firstFit=true; render(); };
+$("jcsv").onclick=jobsCsv;
 $("acsv").onclick=()=>{
   const h=H(), out=[["mmsi","vessel","contractor","type","job","activity","start_utc","end_utc","hours","wind_farm","port","lat","lon","avg_sog_kn","points","hs_avg_m","hs_max_m","wind_avg_ms","wind_max_ms"]];
   for(const v0 of shown()){ const v=info(v0);

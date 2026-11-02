@@ -15,7 +15,7 @@ const readText = f => { try { return fs.readFileSync(f, "utf8"); } catch (e) { r
 // ---------- load data ----------
 const vessels = readJSON(path.join(ROOT, "vessels.json"), []);
 const latest = readJSON(path.join(DATA, "latest.json"), {vessels: {}});
-const disc = readJSON(path.join(DATA, "discovery.json"), {vessels: {}});
+const disc0 = readJSON(path.join(DATA, "discovery.json"), {vessels: {}});
 A.LIMIT_OVERRIDE = readJSON(path.join(ROOT, "limits.json"), {});
 const gj = readJSON(path.join(DATA, "windfarms.geojson"), null);
 if (gj) A.buildWfIndex(gj);
@@ -24,8 +24,10 @@ for (let i = 1; i >= 0; i--) {
   const m = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1)).toISOString().slice(0, 7);
   const p = readText(path.join(DATA, `positions_${m}.csv`)); if (p) A.loadPositions(A.parseCSV(p));
   const w = readText(path.join(DATA, `weather_${m}.csv`)); if (w) A.loadWeather(A.parseCSV(w));
+  const dp = readText(path.join(DATA, `dma_positions_${m}.csv`)); if (dp) A.loadPositions(A.parseCSV(dp));
 }
 A.sortAll();
+const disc = A.mergeDiscovery(disc0, readJSON(path.join(DATA, "dma_discovery.json"), {vessels: {}}));
 
 // ---------- analysis ----------
 const list = vessels.map(v => ({mmsi: String(v.mmsi), label: v.name || v.mmsi, contractor: v.contractor || "", vtype: v.type || ""}));
@@ -46,12 +48,12 @@ const installs = rows.filter(x => !A.isCLV(x.v.vtype)).reduce((s, x) => s + x.r.
 const km = rows.filter(x => A.isCLV(x.v.vtype)).reduce((s, x) => s + x.r.lay.reduce((t, l) => t + l.km, 0), 0);
 const portCount = {};
 rows.forEach(x => x.r.calls.forEach(c => { portCount[c.port] = (portCount[c.port] || 0) + 1; }));
-const AISTYPE = t => { t = +t; if (!t) return "Unknown"; if (t === 30) return "Fishing"; if (t === 31 || t === 32) return "Towing"; if (t === 33) return "Dredging / UW ops";
+const AISTYPE = (t, txt) => { t = +t; if (!t) return txt || "Unknown"; if (t === 30) return "Fishing"; if (t === 31 || t === 32) return "Towing"; if (t === 33) return "Dredging / UW ops";
   if (t === 52) return "Tug"; if (t >= 60 && t < 70) return "Passenger"; if (t >= 70 && t < 80) return "Cargo"; if (t >= 80 && t < 90) return "Tanker";
   if (t >= 90 && t < 100) return "Other (SOV/CTV/special)"; return "Type " + t; };
 const tracked = new Set(list.map(v => v.mmsi));
 const discTop = Object.entries(disc.vessels || {}).map(([m, d]) => ({mmsi: m, ...d}))
-  .filter(d => !tracked.has(d.mmsi) && !(+d.ship_type >= 70 && +d.ship_type < 90) && (d.slots || 0) >= 4)
+  .filter(d => !tracked.has(d.mmsi) && !(+d.ship_type >= 70 && +d.ship_type < 90) && !/cargo|tanker/i.test(d.ship_type_txt || "") && (d.slots || 0) >= 4)
   .sort((a, b) => (b.slots || 0) - (a.slots || 0)).slice(0, 12);
 const repo = process.env.GITHUB_REPOSITORY || "";
 const dash = repo ? `https://${repo.split("/")[0]}.github.io/${repo.split("/")[1]}/` : "";
@@ -94,6 +96,17 @@ html += table(`<tr><th ${TH}>Vessel</th><th ${TH}>Contractor</th><th ${TH}>Type<
       <td ${TDR}>${clv ? "–" : (r.site.length || "–")}</td><td ${TDR}>${clv && k ? k.toFixed(1) : "–"}</td><td ${TD}>${esc(r.wfs[0] || "–")}</td></tr>`;
   }).join(""));
 
+// job log: wind farm visits per vessel
+const visits = [];
+list.forEach(v => { const J = A.jobLog(v.mmsi, HOURS, v.vtype); J.visits.forEach(x => visits.push({v, x, clv: J.clv})); });
+if (visits.length) {
+  html += h2("Wind farm visits (job log)");
+  html += note("One row per vessel visit to a wind farm. Positions = stationary jobs ≥ 2 h at separate spots; net h = position time minus weather time. Full detail per position / lay run in the attached Jobs CSV and in the dashboard (VUO → click vessel).");
+  html += table(`<tr><th ${TH}>Vessel</th><th ${TH}>Wind farm</th><th ${TH}>Arrived</th><th ${TH}>Left</th><th ${THR}>On site h</th><th ${THR}>Positions / runs</th><th ${THR}>h / position</th><th ${THR}>net h / pos.</th><th ${THR}>km</th><th ${THR}>Weather h</th></tr>`,
+    visits.sort((a, b) => b.x.start - a.x.start).slice(0, 40).map(({v, x, clv}) => `<tr><td ${TD}><b>${esc(v.label)}</b></td><td ${TD}>${esc(x.wf)}</td><td ${TD}>${dstr(x.start)}</td><td ${TD}>${x.ongoing ? "ongoing" : dstr(x.end)}</td>
+      <td ${TDR}>${f1(x.h)}</td><td ${TDR}>${x.jobs}</td><td ${TDR}>${clv ? "–" : f1(x.avgJobH)}</td><td ${TDR}>${clv ? "–" : f1(x.netJobH)}</td><td ${TDR}>${clv ? f1(x.km) : "–"}</td><td ${TDR}>${f1(x.wowH)}</td></tr>`).join(""));
+}
+
 // sites
 html += h2("Wind farm activity");
 html += sites.length ? table(`<tr><th ${TH}>Wind farm</th><th ${TH}>Status</th><th ${THR}>Vessels</th><th ${THR}>Vessel-h</th><th ${THR}>Working h</th><th ${THR}>WoW h</th><th ${THR}>Installs</th><th ${THR}>Cable km</th><th ${TH}>Vessels on site</th></tr>`,
@@ -114,7 +127,7 @@ if (Object.keys(portCount).length) {
 if (discTop.length) {
   html += h2("Discovered vessels in wind farms (not tracked)");
   html += table(`<tr><th ${TH}>Name</th><th ${TH}>MMSI</th><th ${TH}>AIS type</th><th ${THR}>Hours seen</th><th ${TH}>Wind farm(s)</th></tr>`,
-    discTop.map(d => `<tr><td ${TD}>${esc(d.name || "–")}</td><td ${TD}>${d.mmsi}</td><td ${TD}>${AISTYPE(d.ship_type)}</td><td ${TDR}>${((d.slots || 0) / 4).toFixed(1)}</td><td ${TD}>${esc((d.sites || []).slice(0, 3).join(", "))}</td></tr>`).join(""));
+    discTop.map(d => `<tr><td ${TD}>${esc(d.name || "–")}</td><td ${TD}>${d.mmsi}</td><td ${TD}>${AISTYPE(d.ship_type, d.ship_type_txt)}</td><td ${TDR}>${((d.slots || 0) / 4).toFixed(1)}</td><td ${TD}>${esc((d.sites || []).slice(0, 3).join(", "))}</td></tr>`).join(""));
 }
 
 if (neverSeen.length) html += note(`<b>No AIS data this week:</b> ${esc(neverSeen.map(x => x.v.label).join(", "))}.`);
@@ -128,8 +141,14 @@ list.forEach(v => A.activity(v.mmsi, HOURS, v.vtype).segs.forEach(s => {
     s.hours.toFixed(2), s.wf || "", s.port || "", s.hs == null ? "" : s.hs.toFixed(2), s.wind == null ? "" : s.wind.toFixed(1)].join(";"));
 }));
 const csvText = "﻿" + csv.join("\n");
+const jobs = [["mmsi", "vessel", "contractor", "type", "wind_farm", "visit_no", "item_no", "activity", "start_utc", "end_utc", "hours", "km", "pause_reason", "weather_h_inside", "hs_avg_m", "lat", "lon"].join(";")];
+list.forEach(v => A.jobLog(v.mmsi, HOURS, v.vtype).visits.forEach((x, i) => { let n = 0; x.items.forEach(it => { const p = it.kind === "Pause"; if (!p) n++;
+  jobs.push([v.mmsi, v.label, v.contractor, v.vtype, x.wf, i + 1, p ? "" : n, p ? "Pause" : it.kind, new Date(it.start).toISOString(), new Date(it.end).toISOString(), it.h.toFixed(2),
+    !p && it.km != null ? it.km.toFixed(2) : "", p ? it.reason : "", !p && it.wowH ? it.wowH.toFixed(2) : "", it.hs != null ? it.hs.toFixed(2) : "", it.lat != null ? it.lat.toFixed(5) : "", it.lon != null ? it.lon.toFixed(5) : ""].join(";")); }); }));
+const jobsText = "\ufeff" + jobs.join("\n");
 fs.writeFileSync(path.join(ROOT, "report.html"), html);
 fs.writeFileSync(path.join(ROOT, "report_activity.csv"), csvText);
+fs.writeFileSync(path.join(ROOT, "report_jobs.csv"), jobsText);
 console.log(`report: ${covered.length}/${list.length} vessels with data, ${sites.length} wind farms, ${installs} installs, ${km.toFixed(1)} km`);
 
 // ---------- send ----------
@@ -143,7 +162,8 @@ console.log(`report: ${covered.length}/${list.length} vessels with data, ${sites
     body: JSON.stringify({
       from: process.env.REPORT_FROM || "Vessel Tracker <onboarding@resend.dev>",
       to: [to], subject: `Vessel Tracker – weekly report ${week}`, html,
-      attachments: [{filename: `vessel_activity_${now.toISOString().slice(0, 10)}.csv`, content: Buffer.from(csvText).toString("base64")}]
+      attachments: [{filename: `vessel_activity_${now.toISOString().slice(0, 10)}.csv`, content: Buffer.from(csvText).toString("base64")},
+                    {filename: `vessel_jobs_${now.toISOString().slice(0, 10)}.csv`, content: Buffer.from(jobsText).toString("base64")}]
     })
   });
   const txt = await res.text();

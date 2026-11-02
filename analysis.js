@@ -152,7 +152,7 @@ function activity(mmsi, hours, vtype) {
     else segs.push({state: state, start: t0, end: t1, pts: p ? [p] : [], anchor: anchor || p || null});
   }
   // weather check only for real working states offshore
-  function wow(st, t) { return isWorking(st) && overLimit(mmsi, t, lim) ? "Waiting on weather" : st; }
+  function wow(st, t) { return st === "Stationary / working" && overLimit(mmsi, t, lim) ? "Waiting on weather" : st; }
   if (pts.length) push("No data", start, Date.parse(pts[0].ts), null); else push("No data", start, end, null);
   pts.forEach(function (p, i) {
     var t = Date.parse(p.ts), tn = i + 1 < pts.length ? Date.parse(pts[i + 1].ts) : Math.min(end, t + INTERVAL * 60e3);
@@ -238,6 +238,82 @@ function vuo(mmsi, hours, vtype) {
     wfs: Object.entries(wfs).sort(function (x, y) { return y[1] - x[1]; }).map(function (x) { return x[0]; })};
 }
 
+/* ---------- Job log: wind farm visits -> positions / lay segments -> pauses ---------- */
+// What the vessel mostly did during [t0,t1] according to the activity segments
+function dominantState(a, t0, t1) {
+  var hrs = {};
+  a.segs.forEach(function (s) {
+    var o = Math.min(s.end, t1) - Math.max(s.start, t0);
+    if (o > 0) hrs[s.state] = (hrs[s.state] || 0) + o / 3600e3;
+  });
+  var best = null, bh = 0;
+  Object.keys(hrs).forEach(function (k) { if (hrs[k] > bh) { bh = hrs[k]; best = k; } });
+  return {state: best, hours: hrs};
+}
+function pauseReason(a, t0, t1, isClv) {
+  var d = dominantState(a, t0, t1), h = d.hours, tot = (t1 - t0) / 3600e3;
+  if ((h["Waiting on weather"] || 0) >= 0.4 * tot) return "Weather";
+  if ((h["Moored"] || 0) >= 0.4 * tot) return "Port";
+  if ((h["At anchor"] || 0) >= 0.4 * tot) return "Anchor";
+  if ((h["Transit"] || 0) + (h["Transit (est.)"] || 0) >= 0.4 * tot) return "Transit";
+  if ((h["No data"] || 0) >= 0.5 * tot) return "No AIS";
+  return isClv ? "Stopped (pull-in / jointing / other)" : "Moving / preparing";
+}
+function jobLog(mmsi, hours, vtype) {
+  var r = vuo(mmsi, hours, vtype), clv = isCLV(vtype), a = r.a, items = [];
+  if (clv) {
+    r.lay.forEach(function (l) { items.push({kind: "Lay / trench", start: l.start, end: l.end, h: l.h, km: l.km, lat: l.lat, lon: l.lon, wf: l.wf, hs: l.hs}); });
+    // stationary stops inside wind farms between lay runs = pull-in, jointing, hold
+    r.stops.filter(function (s) { return s.wf; }).forEach(function (s) {
+      var overlaps = items.some(function (x) { return s.start < x.end && s.end > x.start; });
+      if (!overlaps) items.push({kind: "Stationary on site", start: s.start, end: s.end, h: s.h, km: 0, lat: s.lat, lon: s.lon, wf: s.wf, hs: s.hs});
+    });
+  } else {
+    r.site.forEach(function (s) { items.push({kind: "Position", start: s.start, end: s.end, h: s.h, lat: s.lat, lon: s.lon, wf: s.wf, hs: s.hs}); });
+  }
+  items.sort(function (x, y) { return x.start - y.start; });
+  items.forEach(function (it) { it.wowH = dominantState(a, it.start, it.end).hours["Waiting on weather"] || 0; it.netH = Math.max(0, it.h - it.wowH); });
+  // group into visits: same wind farm, gaps < 24 h
+  var visits = [], V = null;
+  items.forEach(function (it) {
+    var key = it.wf || "Outside wind farms";
+    if (V && V.wf === key && it.start - V.end < 24 * 3600e3) {
+      var gap = (it.start - V.end) / 3600e3;
+      if (gap >= 0.25) V.items.push({kind: "Pause", start: V.end, end: it.start, h: gap, reason: pauseReason(a, V.end, it.start, clv)});
+      V.items.push(it); V.end = Math.max(V.end, it.end);
+    } else {
+      V = {wf: key, start: it.start, end: it.end, items: [it]}; visits.push(V);
+    }
+  });
+  visits.forEach(function (v, i) {
+    var w = v.items.filter(function (x) { return x.kind !== "Pause"; }), p = v.items.filter(function (x) { return x.kind === "Pause"; });
+    v.h = (v.end - v.start) / 3600e3;
+    v.jobs = w.length; v.workH = w.reduce(function (s, x) { return s + x.h; }, 0);
+    v.km = w.reduce(function (s, x) { return s + (x.km || 0); }, 0);
+    v.pauseH = p.reduce(function (s, x) { return s + x.h; }, 0);
+    v.wowH = p.filter(function (x) { return x.reason === "Weather"; }).reduce(function (s, x) { return s + x.h; }, 0)
+      + w.reduce(function (s, x) { return s + (x.wowH || 0); }, 0);
+    v.netJobH = w.length ? w.reduce(function (s, x) { return s + x.netH; }, 0) / w.length : null;
+    v.avgJobH = w.length ? v.workH / w.length : null;
+    // what happened before arriving and after leaving
+    v.arrivedFrom = arrivalContext(a, v.start, -1);
+    v.leftTo = arrivalContext(a, v.end, +1);
+    v.ongoing = NOW() - v.end < 2 * 3600e3;
+  });
+  return {visits: visits, calls: r.calls, clv: clv};
+}
+// nearest port/transit before (dir=-1) or after (dir=+1) a time
+function arrivalContext(a, t, dir) {
+  var segs = a.segs.filter(function (s) { return dir < 0 ? s.end <= t + 60e3 : s.start >= t - 60e3; });
+  if (dir < 0) segs.reverse();
+  for (var i = 0; i < Math.min(segs.length, 6); i++) {
+    var s = segs[i];
+    if (s.state === "Moored" && s.port) return s.port;
+    if (s.state === "Moored" || s.state === "At anchor") return s.port || s.state;
+  }
+  return "";
+}
+
 /* ---------- Sites: per wind farm summary across vessels ---------- */
 // list: [{mmsi,label,contractor,vtype}]
 function siteSummary(list, hours) {
@@ -281,9 +357,25 @@ function loadWeather(rows) {
   });
 }
 function sortAll() {
-  for (var k in positions) positions[k].sort(function (a, b) { return a.ts < b.ts ? -1 : 1; });
+  for (var k in positions) {
+    positions[k].sort(function (a, b) { return a.ts < b.ts ? -1 : 1; });
+    var seen = {}, out = [];   // one point per 15-min slot (live AIS and DMA backfill can overlap)
+    positions[k].forEach(function (p) { var s = Math.floor(Date.parse(p.ts) / 900e3); if (!seen[s]) { seen[s] = 1; out.push(p); } });
+    positions[k] = out;
+  }
   for (var w in weather) weather[w].sort(function (a, b) { return a.ts < b.ts ? -1 : 1; });
 }
 function resetData() { positions = {}; weather = {}; }
+function mergeDiscovery(a, b) {   // live discovery + DMA discovery
+  var V = Object.assign({}, (a && a.vessels) || {});
+  Object.entries((b && b.vessels) || {}).forEach(function (e) {
+    var m = e[0], d = e[1], v = V[m];
+    if (!v) { V[m] = d; return; }
+    V[m] = Object.assign({}, d, v, {slots: (v.slots || 0) + (d.slots || 0),
+      sites: Array.from(new Set((v.sites || []).concat(d.sites || []))).slice(0, 5),
+      first: [v.first, d.first].filter(Boolean).sort()[0], last: [v.last, d.last].filter(Boolean).sort().pop()});
+  });
+  return {vessels: V, updated_utc: (a && a.updated_utc) || (b && b.updated_utc)};
+}
 
 if (typeof module !== "undefined") module.exports = {}; // loaded via vm in Node (report.js)
